@@ -1,0 +1,8 @@
+# Compiled binary
+/restic-web
+
+# Local app state
+/config.json
+
+# Default local repository directory
+/restic-repo/

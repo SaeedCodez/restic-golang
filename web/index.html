@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>restic backup demo</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">⟳</div>
+      <div>
+        <h1>restic backup demo</h1>
+        <p class="tagline">Incremental backups, powered by the restic CLI</p>
+      </div>
+    </div>
+    <div class="status-pills">
+      <span id="resticPill" class="pill pill-muted">checking restic…</span>
+      <span id="repoPill" class="pill pill-muted">no repository</span>
+      <span id="busyPill" class="pill pill-idle">idle</span>
+    </div>
+  </header>
+
+  <!-- Global banner for app-wide warnings (e.g. restic not installed). -->
+  <div id="globalBanner" class="banner hidden"></div>
+
+  <nav class="tabs">
+    <button class="tab active" data-tab="settings">Settings</button>
+    <button class="tab" data-tab="backup">Backup</button>
+    <button class="tab" data-tab="snapshots">Snapshots</button>
+    <button class="tab" data-tab="restore">Restore</button>
+  </nav>
+
+  <main>
+    <!-- ================= SETTINGS ================= -->
+    <section id="tab-settings" class="tabpanel active">
+      <div class="card">
+        <h2>Repository settings</h2>
+        <p class="hint">Choose where restic stores your encrypted backups. Use <strong>Local directory</strong> to try the demo immediately with no credentials.</p>
+
+        <div class="field">
+          <label>Backend type</label>
+          <div class="segmented" id="backendToggle">
+            <button type="button" data-backend="Local" class="seg active">Local directory</button>
+            <button type="button" data-backend="S3" class="seg">S3-compatible</button>
+          </div>
+        </div>
+
+        <!-- Local fields -->
+        <div id="localFields">
+          <div class="field">
+            <label for="localPath">Repository directory</label>
+            <input id="localPath" type="text" placeholder="/Users/you/restic-repo" />
+            <p class="hint">A folder on this machine that will hold the restic repository.</p>
+          </div>
+        </div>
+
+        <!-- S3 fields -->
+        <div id="s3Fields" class="hidden">
+          <div class="grid2">
+            <div class="field">
+              <label for="endpoint">Endpoint URL</label>
+              <input id="endpoint" type="text" placeholder="https://s3.amazonaws.com" />
+            </div>
+            <div class="field">
+              <label for="bucket">Bucket name</label>
+              <input id="bucket" type="text" placeholder="my-backups" />
+            </div>
+            <div class="field">
+              <label for="region">Region <span class="optional">(optional)</span></label>
+              <input id="region" type="text" placeholder="us-east-1" />
+            </div>
+            <div class="field">
+              <label for="accessKey">Access key ID</label>
+              <input id="accessKey" type="text" autocomplete="off" />
+            </div>
+            <div class="field">
+              <label for="secretKey">Secret access key</label>
+              <input id="secretKey" type="password" autocomplete="off" />
+            </div>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="password">Repository password</label>
+          <input id="password" type="password" autocomplete="off" placeholder="used to encrypt your backups" />
+          <p class="hint">Required for both backends. restic encrypts everything with this password — if you lose it, the backups cannot be read.</p>
+        </div>
+
+        <div class="actions">
+          <button id="saveSettings" class="btn btn-primary">Save settings</button>
+          <button id="testConn" class="btn">Test connection</button>
+          <button id="initRepo" class="btn btn-ghost hidden">Initialize repository</button>
+        </div>
+        <div id="settingsResult" class="result hidden"></div>
+      </div>
+    </section>
+
+    <!-- ================= BACKUP ================= -->
+    <section id="tab-backup" class="tabpanel">
+      <div class="card">
+        <h2>Run a backup</h2>
+        <p class="hint">Enter the absolute path of a folder to back up. The first run stores everything; later runs only store what changed.</p>
+        <div class="field">
+          <label for="sourcePath">Source folder (absolute path)</label>
+          <input id="sourcePath" type="text" placeholder="/Users/you/Documents/important" />
+          <p class="hint">A browser cannot hand the server a real local path, so type it here.</p>
+        </div>
+        <div class="actions">
+          <button id="startBackup" class="btn btn-primary">Start backup</button>
+        </div>
+      </div>
+
+      <div id="backupProgress" class="card progress-card hidden">
+        <h3>Backup progress</h3>
+        <div class="progress-head">
+          <span id="backupPhase" class="phase">Starting…</span>
+          <span id="backupPercent" class="percent">0%</span>
+        </div>
+        <div class="progressbar"><div id="backupBar" class="progressbar-fill"></div></div>
+        <div class="progress-stats">
+          <span id="backupFiles">0 / 0 files</span>
+          <span id="backupBytes">0 B / 0 B</span>
+        </div>
+        <div id="backupCurrent" class="current-file"></div>
+
+        <div id="backupSummary" class="summary hidden"></div>
+
+        <details class="logbox" open>
+          <summary>Live log</summary>
+          <pre id="backupLog" class="log"></pre>
+        </details>
+      </div>
+    </section>
+
+    <!-- ================= SNAPSHOTS ================= -->
+    <section id="tab-snapshots" class="tabpanel">
+      <div class="card">
+        <div class="card-head">
+          <h2>Snapshots</h2>
+          <button id="refreshSnaps" class="btn btn-small">Refresh</button>
+        </div>
+        <div id="snapsResult" class="result hidden"></div>
+        <div class="table-wrap">
+          <table class="snaps">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Time</th>
+                <th>Source paths</th>
+                <th>Size</th>
+                <th>Files</th>
+                <th class="right">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="snapsBody">
+              <tr><td colspan="6" class="empty">No snapshots loaded yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= RESTORE ================= -->
+    <section id="tab-restore" class="tabpanel">
+      <div class="card">
+        <h2>Restore a snapshot</h2>
+        <p class="hint">Pick a snapshot and a target folder. restic will recreate the files under that folder.</p>
+        <div class="grid2">
+          <div class="field">
+            <label for="restoreSnap">Snapshot</label>
+            <select id="restoreSnap"></select>
+          </div>
+          <div class="field">
+            <label for="restoreTarget">Target folder (absolute path)</label>
+            <input id="restoreTarget" type="text" placeholder="/Users/you/restore-here" />
+          </div>
+        </div>
+        <div class="actions">
+          <button id="startRestore" class="btn btn-primary">Start restore</button>
+        </div>
+      </div>
+
+      <div id="restoreProgress" class="card progress-card hidden">
+        <h3>Restore progress</h3>
+        <div class="progress-head">
+          <span id="restorePhase" class="phase">Starting…</span>
+          <span id="restorePercent" class="percent">0%</span>
+        </div>
+        <div class="progressbar"><div id="restoreBar" class="progressbar-fill"></div></div>
+        <div class="progress-stats">
+          <span id="restoreFiles">0 / 0 files</span>
+          <span id="restoreBytes">0 B / 0 B</span>
+        </div>
+        <div id="restoreCurrent" class="current-file"></div>
+
+        <div id="restoreSummary" class="summary hidden"></div>
+
+        <details class="logbox" open>
+          <summary>Live log</summary>
+          <pre id="restoreLog" class="log"></pre>
+        </details>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <span>Single-user local tool · no authentication · the actual backup engine is <code>restic</code></span>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
