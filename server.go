@@ -33,6 +33,12 @@ func (s *Server) routes(static http.Handler) http.Handler {
 	mux.HandleFunc("GET /api/repositories/{id}", s.handleRepoGet)
 	mux.HandleFunc("PUT /api/repositories/{id}", s.handleRepoUpdate)
 	mux.HandleFunc("DELETE /api/repositories/{id}", s.handleRepoDelete)
+	mux.HandleFunc("POST /api/repositories/{id}/test", s.handleRepoTest)
+	mux.HandleFunc("POST /api/repositories/{id}/init", s.handleRepoInit)
+	mux.HandleFunc("POST /api/repositories/{id}/unlock", s.handleRepoUnlock)
+	mux.HandleFunc("GET /api/repositories/{id}/snapshots", s.handleRepoSnapshots)
+	mux.HandleFunc("POST /api/repositories/{id}/restore", s.handleRepoRestore)
+	mux.HandleFunc("POST /api/repositories/{id}/download", s.handleRepoDownload)
 
 	mux.HandleFunc("GET /api/folders", s.handleFolderList)
 	mux.HandleFunc("POST /api/folders", s.handleFolderCreate)
@@ -45,6 +51,7 @@ func (s *Server) routes(static http.Handler) http.Handler {
 	mux.HandleFunc("GET /api/jobs/{id}", s.handleJobGet)
 	mux.HandleFunc("PUT /api/jobs/{id}", s.handleJobUpdate)
 	mux.HandleFunc("DELETE /api/jobs/{id}", s.handleJobDelete)
+	mux.HandleFunc("GET /api/jobs/{id}/snapshots", s.handleJobSnapshots)
 
 	// Runs: every long-running operation is a run, watched the same way.
 	mux.HandleFunc("POST /api/jobs/{id}/run", s.handleJobRun)
@@ -54,6 +61,7 @@ func (s *Server) routes(static http.Handler) http.Handler {
 	mux.HandleFunc("GET /api/runs/{id}/log", s.handleRunLog)
 	mux.HandleFunc("POST /api/runs/{id}/stop", s.handleRunStop)
 	mux.HandleFunc("GET /api/runs/{id}/events", s.handleRunEvents)
+	mux.HandleFunc("GET /api/runs/{id}/download", s.handleRunDownload)
 
 	// Live activity stream for lists and badges.
 	mux.HandleFunc("GET /api/events", s.handleEvents)

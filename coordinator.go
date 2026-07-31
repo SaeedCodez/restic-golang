@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -100,13 +103,96 @@ func (c *Coordinator) StartBackup(jobID string) (*Run, error) {
 	})
 }
 
+// StartInit initializes a repository as a tracked run (repository setup is
+// visible the same way as any other long operation).
+func (c *Coordinator) StartInit(repoID string) (*Run, error) {
+	repo, ok := c.app.repos.Get(repoID)
+	if !ok {
+		return nil, notFoundf("repository not found")
+	}
+	run := &Run{Kind: KindInit, Status: StatusStarting, RepositoryID: repo.ID, RepoName: repo.Name}
+	return c.startRun(repo, run, func(ctx context.Context, h *runHandle) (int, error) {
+		h.Log("info", "system", "Initializing repository "+repo.Name)
+		out, err := c.app.runner.Init(ctx, &repo)
+		if s := strings.TrimSpace(out); s != "" {
+			h.Log("info", "stdout", s)
+		}
+		if err != nil {
+			return 0, err
+		}
+		h.Log("ok", "system", "Repository initialized.")
+		return 0, nil
+	})
+}
+
+// StartRestore restores a snapshot into a target folder as a tracked run.
+func (c *Coordinator) StartRestore(repoID, snapshotID, target string) (*Run, error) {
+	repo, ok := c.app.repos.Get(repoID)
+	if !ok {
+		return nil, notFoundf("repository not found")
+	}
+	snapshotID = strings.TrimSpace(snapshotID)
+	target = strings.TrimSpace(target)
+	if snapshotID == "" {
+		return nil, validf("please choose a snapshot to restore")
+	}
+	if target == "" {
+		return nil, validf("please provide a target folder for the restore")
+	}
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		return nil, validf("could not create target folder: %v", err)
+	}
+	run := &Run{
+		Kind: KindRestore, Status: StatusStarting, RepositoryID: repo.ID, RepoName: repo.Name,
+		Params: map[string]string{"snapshotId": snapshotID, "target": target},
+	}
+	return c.startRun(repo, run, func(ctx context.Context, h *runHandle) (int, error) {
+		h.Log("info", "system", "Restoring "+shortID(snapshotID)+" to "+target)
+		return c.app.runner.Restore(ctx, &repo, snapshotID, target, h)
+	})
+}
+
+// StartDownload restores a snapshot into an app-managed temp workspace as a
+// tracked run; once it succeeds, GET /api/runs/{id}/download streams a zip of
+// that workspace. Modeling download as a normal run keeps it uniform — visible,
+// cancelable, and repo-serialized — and avoids coupling run liveness to the
+// download connection.
+func (c *Coordinator) StartDownload(repoID, snapshotID string) (*Run, error) {
+	repo, ok := c.app.repos.Get(repoID)
+	if !ok {
+		return nil, notFoundf("repository not found")
+	}
+	snapshotID = strings.TrimSpace(snapshotID)
+	if snapshotID == "" {
+		return nil, validf("please choose a snapshot to download")
+	}
+	run := &Run{
+		Kind: KindDownload, Status: StatusStarting, RepositoryID: repo.ID, RepoName: repo.Name,
+		Params: map[string]string{"snapshotId": snapshotID},
+	}
+	return c.startRun(repo, run, func(ctx context.Context, h *runHandle) (int, error) {
+		target := filepath.Join(c.app.dataDir, "downloads", h.id)
+		if err := os.MkdirAll(target, 0o755); err != nil {
+			return 0, fmt.Errorf("could not create download workspace: %w", err)
+		}
+		c.app.runs.mutate(h.id, true, func(r *Run) { r.Params["target"] = target })
+		h.Log("info", "system", "Preparing download of snapshot "+shortID(snapshotID))
+		return c.app.runner.Restore(ctx, &repo, snapshotID, target, h)
+	})
+}
+
 // startRun reserves the repository, creates the durable run, and launches the
 // operation in the background. It returns the created run (or a BusyError).
 func (c *Coordinator) startRun(repo Repository, run *Run, exec runExec) (*Run, error) {
 	c.mu.Lock()
 	if ar := c.active[repo.ID]; ar != nil {
-		c.mu.Unlock()
-		return nil, &BusyError{RepoName: repo.Name, Blocking: ar.info()}
+		// A holder whose run has already reached a terminal state is finishing but
+		// has not yet released the slot; it no longer blocks a new operation, so a
+		// job can be re-run the instant it is seen to have succeeded.
+		if held, ok := c.store.Get(ar.runID); !ok || !held.Status.Terminal() {
+			c.mu.Unlock()
+			return nil, &BusyError{RepoName: repo.Name, Blocking: ar.info()}
+		}
 	}
 	handle, err := c.store.Begin(run)
 	if err != nil {

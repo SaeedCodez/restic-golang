@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"syscall"
 	"time"
 )
@@ -28,7 +30,12 @@ func reapOrphan(pid int) bool {
 // affected repository gets a best-effort, stale-only `restic unlock` in the
 // background so its next operation is not blocked by a leftover lock.
 func (a *App) Reconcile() {
+	// Download workspaces are ephemeral; drop any left by a previous session.
+	_ = os.RemoveAll(filepath.Join(a.dataDir, "downloads"))
+
 	repoIDs := a.runs.reconcile(reapOrphan)
+	a.runs.prune(maxRunsPerJob)
+
 	if !a.runner.Available() {
 		return
 	}

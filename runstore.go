@@ -18,6 +18,10 @@ import (
 // only needs to be recent enough that a page loaded mid-run shows a sensible bar.
 const progressFlushInterval = time.Second
 
+// maxRunsPerJob caps how many runs are retained per job (and per jobless kind),
+// bounding disk use and the startup scan. Generous, since a run record is tiny.
+const maxRunsPerJob = 100
+
 // RunStore owns the on-disk runs tree:
 //
 //	<dir>/<runId>/run.json    the full, authoritative run record (atomic writes)
@@ -162,6 +166,32 @@ func (s *RunStore) ReadLog(id string, afterSeq int64) ([]LogLine, error) {
 // writeRunLocked persists a run record atomically. Caller holds s.mu.
 func (s *RunStore) writeRunLocked(run *Run) error {
 	return writeJSONFileAtomic(s.runPath(run.ID), run)
+}
+
+// prune keeps only the newest keepPerJob runs per job (jobless runs, grouped by
+// their empty job id, are capped the same way), deleting older run directories.
+// Active runs are never pruned. Called at startup to bound history and the scan.
+func (s *RunStore) prune(keepPerJob int) {
+	if keepPerJob <= 0 {
+		return
+	}
+	counts := map[string]int{}
+	for _, run := range s.list(nil) { // newest first
+		if run.Status.Active() {
+			continue
+		}
+		counts[run.JobID]++
+		if counts[run.JobID] > keepPerJob {
+			s.deleteRun(run.ID)
+		}
+	}
+}
+
+func (s *RunStore) deleteRun(id string) {
+	s.mu.Lock()
+	delete(s.index, id)
+	s.mu.Unlock()
+	_ = os.RemoveAll(s.runDir(id))
 }
 
 // AppendSystemLine appends a system log line to a run's log, continuing the

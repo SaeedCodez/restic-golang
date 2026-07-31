@@ -65,8 +65,21 @@ type fakeRunner struct {
 	snapErr    error
 	unlockErr  error
 
+	// onRestore, if set, is called with the restore target so a test can simulate
+	// restic writing files there (used to exercise the download zip).
+	onRestore func(target string)
+
 	// streamFn drives Backup/Restore. If nil, the op succeeds immediately.
 	streamFn func(ctx context.Context, kind RunKind, sink RunSink) (int, error)
+
+	mu       sync.Mutex
+	snapTags []string // tags passed to Snapshots, for assertions
+}
+
+func (f *fakeRunner) recordedTags() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.snapTags...)
 }
 
 func (f *fakeRunner) Available() bool { return f.installed }
@@ -80,6 +93,9 @@ func (f *fakeRunner) Init(ctx context.Context, repo *Repository) (string, error)
 }
 
 func (f *fakeRunner) Snapshots(ctx context.Context, repo *Repository, tag string) ([]Snapshot, error) {
+	f.mu.Lock()
+	f.snapTags = append(f.snapTags, tag)
+	f.mu.Unlock()
 	return f.snaps, f.snapErr
 }
 
@@ -95,6 +111,9 @@ func (f *fakeRunner) Backup(ctx context.Context, repo *Repository, source string
 
 func (f *fakeRunner) Restore(ctx context.Context, repo *Repository, snapshotID, target string, sink RunSink) (int, error) {
 	sink.PID(4242)
+	if f.onRestore != nil {
+		f.onRestore(target)
+	}
 	if f.streamFn != nil {
 		return f.streamFn(ctx, KindRestore, sink)
 	}
