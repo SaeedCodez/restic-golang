@@ -22,6 +22,7 @@ type App struct {
 	runs   *RunStore
 	runner Runner
 	bus    eventBus
+	bcast  *broadcaster
 	coord  *Coordinator
 }
 
@@ -50,13 +51,14 @@ func newAppWithRunner(dataDir string, runner Runner) (*App, error) {
 		return nil, err
 	}
 
-	bus := eventBus(noopBus{})
+	bcast := newBroadcaster()
+	bus := eventBus(bcast)
 	runs, err := newRunStore(filepath.Join(dataDir, "runs"), bus)
 	if err != nil {
 		return nil, err
 	}
 
-	app := &App{dataDir: dataDir, repos: repos, folders: folders, jobs: jobs, runs: runs, runner: runner, bus: bus}
+	app := &App{dataDir: dataDir, repos: repos, folders: folders, jobs: jobs, runs: runs, runner: runner, bus: bus, bcast: bcast}
 	app.coord = newCoordinator(app, runs, runner, bus)
 	return app, nil
 }

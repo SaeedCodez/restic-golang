@@ -27,11 +27,6 @@ func main() {
 	dataDir := flag.String("data", "data", "directory for persisted app state (repositories, folders, jobs, runs)")
 	flag.Parse()
 
-	store, err := loadConfigStore(*configPath)
-	if err != nil {
-		log.Fatalf("could not load config %q: %v", *configPath, err)
-	}
-
 	app, err := newApp(*dataDir)
 	if err != nil {
 		log.Fatalf("could not open data directory: %v", err)
@@ -52,8 +47,7 @@ func main() {
 	// and orphaned restic children are reaped.
 	app.Reconcile()
 
-	hub := newHub()
-	srv := newServer(app, store, hub)
+	srv := newServer(app)
 
 	httpServer := &http.Server{
 		Addr:              *addr,

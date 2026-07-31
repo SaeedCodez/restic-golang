@@ -13,17 +13,11 @@ import (
 // HTTP handler.
 func testServer(t *testing.T) http.Handler {
 	t.Helper()
-	dir := t.TempDir()
-	app, err := newApp(dir)
+	app, err := newApp(t.TempDir())
 	if err != nil {
 		t.Fatalf("newApp: %v", err)
 	}
-	store, err := loadConfigStore(filepath.Join(dir, "config.json"))
-	if err != nil {
-		t.Fatalf("loadConfigStore: %v", err)
-	}
-	srv := newServer(app, store, newHub())
-	return srv.routes(http.NotFoundHandler())
+	return newServer(app).routes(http.NotFoundHandler())
 }
 
 // doJSON performs an HTTP request with an optional JSON body and decodes the
