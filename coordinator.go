@@ -283,12 +283,14 @@ func (c *Coordinator) finish(ar *activeRun) {
 }
 
 // classifyRun maps restic's exit code (and cancellation) to a terminal status.
+// The cancellation check comes first so a user-stopped run is labeled canceled
+// even on the one exec path (init) that surfaces the interruption as an error.
 func classifyRun(ar *activeRun, ctx context.Context, code int, err error) (RunStatus, string) {
-	if err != nil {
-		return StatusFailed, err.Error()
-	}
 	if ar.stopped.Load() || errors.Is(ctx.Err(), context.Canceled) {
 		return StatusCanceled, ""
+	}
+	if err != nil {
+		return StatusFailed, err.Error()
 	}
 	switch code {
 	case 0:

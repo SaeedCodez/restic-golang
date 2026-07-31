@@ -276,7 +276,11 @@ type Run struct {
 
 	// PID is the restic child process id (its own process-group leader), persisted
 	// so startup reconciliation can reap an orphan a crash may have left behind.
-	PID int `json:"pid,omitempty"`
+	// PIDStart is an opaque process-start token (Linux: /proc start time) used to
+	// confirm the pid still refers to the SAME process before reaping, so a
+	// recycled pid is never killed.
+	PID      int    `json:"pid,omitempty"`
+	PIDStart string `json:"pidStart,omitempty"`
 
 	Progress Progress `json:"progress"`
 	Summary  *Summary `json:"summary,omitempty"`

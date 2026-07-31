@@ -207,9 +207,18 @@ func (s *RunStore) AppendSystemLine(id, level, message string) {
 	if err != nil {
 		return
 	}
-	f, err := os.OpenFile(s.logPath(id), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	f, err := os.OpenFile(s.logPath(id), os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
 	if err != nil {
 		return
+	}
+	// A prior crash may have left a torn (newline-less) final line; start on a
+	// clean boundary so this system line stays parseable. ReadAt does not disturb
+	// the O_APPEND write offset.
+	if fi, statErr := f.Stat(); statErr == nil && fi.Size() > 0 {
+		last := make([]byte, 1)
+		if _, rerr := f.ReadAt(last, fi.Size()-1); rerr == nil && last[0] != '\n' {
+			data = append([]byte{'\n'}, data...)
+		}
 	}
 	_, _ = f.Write(append(data, '\n'))
 	_ = f.Sync()
@@ -222,23 +231,23 @@ func (s *RunStore) AppendSystemLine(id, level, message string) {
 // left behind). It returns the repository ids that had interrupted runs, for a
 // best-effort stale-lock cleanup. It runs before the server accepts traffic, so
 // no concurrent run activity races it.
-func (s *RunStore) reconcile(reap func(pid int) bool) []string {
+func (s *RunStore) reconcile(reap func(pid int, startToken string) bool) []string {
 	type item struct {
-		id, repoID string
-		pid        int
+		id, repoID, startToken string
+		pid                    int
 	}
 	var items []item
 	s.mu.RLock()
 	for _, run := range s.index {
 		if run.Status.Active() {
-			items = append(items, item{run.ID, run.RepositoryID, run.PID})
+			items = append(items, item{run.ID, run.RepositoryID, run.PIDStart, run.PID})
 		}
 	}
 	s.mu.RUnlock()
 
 	repoSet := map[string]bool{}
 	for _, it := range items {
-		if reap != nil && reap(it.pid) {
+		if reap != nil && reap(it.pid, it.startToken) {
 			s.AppendSystemLine(it.id, "warn", "Reaped an orphaned restic process left running by a previous app instance.")
 		}
 		s.AppendSystemLine(it.id, "error", "The application was restarted while this run was in progress; marking it interrupted.")
@@ -287,9 +296,15 @@ func (s *RunStore) Begin(run *Run) (*runHandle, error) {
 	stored := run.clone()
 	s.index[run.ID] = stored
 	err = s.writeRunLocked(stored)
+	if err != nil {
+		delete(s.index, run.ID)
+	}
 	s.mu.Unlock()
 	if err != nil {
+		// Don't leave an orphaned run directory (log.jsonl with no run.json) that
+		// nothing would ever reclaim.
 		logf.Close()
+		_ = os.RemoveAll(s.runDir(run.ID))
 		return nil, err
 	}
 
@@ -332,16 +347,21 @@ type runHandle struct {
 	lastFlush time.Time
 }
 
-// Log appends a durable, seq-numbered log line and publishes it live.
+// Log appends a durable, seq-numbered log line and publishes it live. Once the
+// run has finalized (log closed), Log is a no-op: this keeps the per-run seq in
+// 1:1 correspondence with durable lines and avoids publishing a phantom line
+// that a late Stop could otherwise emit during the finalize→finish window.
 func (h *runHandle) Log(level, stream, message string) {
 	h.logMu.Lock()
+	if h.logf == nil {
+		h.logMu.Unlock()
+		return
+	}
 	h.seq++
 	line := LogLine{Seq: h.seq, TS: time.Now().UTC(), Stream: stream, Level: level, Message: message}
-	if h.logf != nil {
-		if data, err := json.Marshal(line); err == nil {
-			data = append(data, '\n')
-			_, _ = h.logf.Write(data)
-		}
+	if data, err := json.Marshal(line); err == nil {
+		data = append(data, '\n')
+		_, _ = h.logf.Write(data)
 	}
 	h.logMu.Unlock()
 
@@ -371,10 +391,10 @@ func (h *runHandle) Summary(s Summary) {
 	h.store.mutate(h.id, true, func(r *Run) { r.Summary = &cp })
 }
 
-// PID records the restic child's process id, persisted so a crash's orphan can
-// be reaped on the next startup.
-func (h *runHandle) PID(pid int) {
-	h.store.mutate(h.id, true, func(r *Run) { r.PID = pid })
+// PID records the restic child's process id and start token, persisted so a
+// crash's orphan can be positively identified and reaped on the next startup.
+func (h *runHandle) PID(pid int, startToken string) {
+	h.store.mutate(h.id, true, func(r *Run) { r.PID = pid; r.PIDStart = startToken })
 }
 
 // setStatus transitions the run to a non-terminal status and publishes it.

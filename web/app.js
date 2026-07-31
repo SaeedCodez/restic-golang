@@ -87,8 +87,10 @@ const app = {
 
 document.addEventListener("DOMContentLoaded", async () => {
   window.addEventListener("hashchange", router);
-  await loadStatus();
+  // Open the live stream first: it seeds the active-runs badge from its on-connect
+  // snapshot, so a run finishing during startup can't leave the badge stale.
   openGlobalStream();
+  await loadStatus();
   router();
 });
 
@@ -118,8 +120,8 @@ async function loadStatus() {
     banner.classList.add("hidden");
   }
 
-  app.activeRuns.clear();
-  (s.activeRuns || []).forEach((run) => app.activeRuns.set(run.id, run.status));
+  // app.activeRuns is driven by the global stream (which sends an on-connect
+  // snapshot), so it is authoritative and we don't reseed it from this fetch.
   updateActivePill();
 }
 

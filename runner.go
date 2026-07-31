@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -23,7 +24,7 @@ type RunSink interface {
 	Log(level, stream, message string)
 	Progress(p Progress)
 	Summary(s Summary)
-	PID(pid int)
+	PID(pid int, startToken string)
 }
 
 // Runner abstracts every restic operation the app performs. All restic access
@@ -185,7 +186,7 @@ func streamRestic(ctx context.Context, repo *Repository, kind RunKind, sink RunS
 		return -1, fmt.Errorf("could not start restic: %w", err)
 	}
 	if cmd.Process != nil {
-		sink.PID(cmd.Process.Pid)
+		sink.PID(cmd.Process.Pid, procStartToken(cmd.Process.Pid))
 	}
 
 	var wg sync.WaitGroup
@@ -202,6 +203,9 @@ func streamRestic(ctx context.Context, repo *Repository, kind RunKind, sink RunS
 				sink.Log("warn", "stderr", line)
 			}
 		}
+		// Keep draining even if the scanner aborted (e.g. an over-long line), so
+		// restic can never block writing to a full pipe and wedge cmd.Wait.
+		_, _ = io.Copy(io.Discard, stderr)
 	}()
 
 	// stdout: one JSON object per line.
@@ -221,6 +225,7 @@ func streamRestic(ctx context.Context, repo *Repository, kind RunKind, sink RunS
 			}
 			mapResticMessage(kind, &m, sink)
 		}
+		_, _ = io.Copy(io.Discard, stdout)
 	}()
 
 	wg.Wait()

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"log"
 	"net/http"
 	"os"
 	"time"
@@ -172,5 +173,9 @@ func (s *Server) handleRunDownload(w http.ResponseWriter, r *http.Request) {
 	filename := "snapshot-" + shortID(run.Params["snapshotId"]) + ".zip"
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
-	_ = zipDir(w, target)
+	// Headers are committed on the first byte, so a mid-stream failure can't change
+	// the status — but it must not be swallowed silently.
+	if err := zipDir(w, target); err != nil {
+		log.Printf("run %s: download zip stream failed: %v", run.ID, err)
+	}
 }

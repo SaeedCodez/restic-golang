@@ -37,7 +37,7 @@ func (c *captureSink) Summary(s Summary) {
 	c.summary = &cp
 }
 
-func (c *captureSink) PID(pid int) {
+func (c *captureSink) PID(pid int, startToken string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.pid = pid
@@ -102,7 +102,7 @@ func (f *fakeRunner) Snapshots(ctx context.Context, repo *Repository, tag string
 func (f *fakeRunner) Unlock(ctx context.Context, repo *Repository) error { return f.unlockErr }
 
 func (f *fakeRunner) Backup(ctx context.Context, repo *Repository, source string, tags []string, sink RunSink) (int, error) {
-	sink.PID(4242)
+	sink.PID(4242, "faketoken")
 	if f.streamFn != nil {
 		return f.streamFn(ctx, KindBackup, sink)
 	}
@@ -110,7 +110,7 @@ func (f *fakeRunner) Backup(ctx context.Context, repo *Repository, source string
 }
 
 func (f *fakeRunner) Restore(ctx context.Context, repo *Repository, snapshotID, target string, sink RunSink) (int, error) {
-	sink.PID(4242)
+	sink.PID(4242, "faketoken")
 	if f.onRestore != nil {
 		f.onRestore(target)
 	}

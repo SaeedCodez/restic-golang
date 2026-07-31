@@ -11,8 +11,11 @@ import (
 // repositories, folders and jobs. They are thin: decode, delegate to the store,
 // map typed store errors to status codes.
 
-// decodeJSON reads the request body into dst, writing a 400 on failure.
+// decodeJSON reads the request body into dst, writing a 400 on failure. The body
+// is capped so a malformed or hostile client cannot make the server buffer an
+// unbounded request.
 func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MiB
 	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
 		errorJSON(w, http.StatusBadRequest, "bad_request", "Could not read request: "+err.Error())
 		return false

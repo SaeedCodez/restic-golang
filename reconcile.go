@@ -9,14 +9,15 @@ import (
 )
 
 // reapOrphan kills the process group of a restic child that outlived a previous
-// app instance (e.g. after the app was SIGKILLed). It only acts when the pid can
-// be positively identified as a live restic process, so a recycled pid is never
-// killed. It returns whether it reaped anything.
-func reapOrphan(pid int) bool {
+// app instance (e.g. after the app was SIGKILLed). It acts only when the pid is
+// alive AND its current start token matches the one recorded when we launched it
+// AND it looks like restic — so a recycled pid (whose start token necessarily
+// differs) is never killed. It returns whether it reaped anything.
+func reapOrphan(pid int, startToken string) bool {
 	if pid <= 0 || !processAlive(pid) {
 		return false
 	}
-	if !isOwnResticProcess(pid) {
+	if !isOwnResticProcess(pid, startToken) {
 		return false
 	}
 	_ = signalProcessGroup(pid, syscall.SIGKILL)

@@ -135,6 +135,15 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	defer s.app.bcast.unsubscribeGlobal(ch)
 
 	fmt.Fprint(w, ": connected\n\n")
+
+	// Snapshot the currently-active runs AFTER subscribing, so the client's live
+	// badge/list is seeded from the stream itself and never depends on a separate
+	// status fetch racing the subscription.
+	for _, run := range s.app.runs.activeRuns() {
+		if data, err := json.Marshal(map[string]any{"type": "run", "run": run}); err == nil {
+			writeSSEMessage(w, sseMessage{data: data})
+		}
+	}
 	flusher.Flush()
 
 	ticker := time.NewTicker(sseKeepalive)
