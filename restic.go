@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -140,7 +141,12 @@ func resticSnapshots(ctx context.Context, cfg *Config) ([]Snapshot, error) {
 	if err != nil {
 		return nil, classifyRepoError(string(out))
 	}
+	return decodeSnapshots(out)
+}
 
+// decodeSnapshots parses the JSON output of `restic snapshots --json` into the
+// UI-facing Snapshot shape. Shared by the legacy path and the Runner.
+func decodeSnapshots(out []byte) ([]Snapshot, error) {
 	var raw []resticSnapshot
 	if err := json.Unmarshal(out, &raw); err != nil {
 		return nil, fmt.Errorf("could not parse snapshot list: %w", err)
@@ -170,11 +176,12 @@ func classifyRepoError(text string) error {
 	low := strings.ToLower(text)
 	switch {
 	case strings.Contains(low, "wrong password") || strings.Contains(low, "no key found"):
-		return fmt.Errorf("wrong repository password")
+		return errWrongPassword
 	case strings.Contains(low, "unable to open config") ||
 		strings.Contains(low, "is there a repository") ||
 		strings.Contains(low, "does not exist") ||
 		strings.Contains(low, "no such file") ||
+		strings.Contains(low, "the specified bucket does not exist") ||
 		strings.Contains(low, "unable to open repository"):
 		return errNotInitialized
 	default:
@@ -182,8 +189,11 @@ func classifyRepoError(text string) error {
 	}
 }
 
-// errNotInitialized is a sentinel so handlers can offer to initialize the repo.
-var errNotInitialized = fmt.Errorf("repository is not initialized")
+// Sentinel errors so handlers/runner can special-case common repo states.
+var (
+	errNotInitialized = errors.New("repository is not initialized")
+	errWrongPassword  = errors.New("wrong repository password")
+)
 
 // resticMessage captures every field we care about across restic's --json
 // "status", "summary" and "error" messages, for both backup and restore.
