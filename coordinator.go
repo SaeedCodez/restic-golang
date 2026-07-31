@@ -99,7 +99,23 @@ func (c *Coordinator) StartBackup(jobID string) (*Run, error) {
 	src := folder.Path
 	return c.startRun(repo, run, func(ctx context.Context, h *runHandle) (int, error) {
 		h.Log("info", "system", fmt.Sprintf("Backing up %s to repository %q", src, repo.Name))
-		return c.runner.Backup(ctx, &repo, src, []string{tag}, h)
+		code, err := c.runner.Backup(ctx, &repo, src, []string{tag}, h)
+
+		// If the repository has not been initialized yet (restic exit code 10),
+		// create it and retry once, so running a job "just works" without a
+		// separate Initialize step. The step is logged, never silent.
+		if err == nil && code == resticExitNotInitialized && ctx.Err() == nil {
+			h.Log("warn", "system", "Repository is not initialized yet — initializing it now…")
+			if out, ierr := c.runner.Init(ctx, &repo); ierr != nil {
+				h.Log("error", "system", "Automatic initialization failed: "+ierr.Error())
+				return code, err // keep the original not-initialized failure
+			} else if s := strings.TrimSpace(out); s != "" {
+				h.Log("info", "stdout", s)
+			}
+			h.Log("ok", "system", "Repository initialized. Retrying backup…")
+			code, err = c.runner.Backup(ctx, &repo, src, []string{tag}, h)
+		}
+		return code, err
 	})
 }
 
@@ -295,17 +311,17 @@ func classifyRun(ar *activeRun, ctx context.Context, code int, err error) (RunSt
 	switch code {
 	case 0:
 		return StatusSuccess, ""
-	case 3:
+	case resticExitWarnings:
 		// Backup created a snapshot but some source files were unreadable.
 		return StatusSuccessWarnings, ""
-	case 130:
+	case resticExitInterrupted:
 		// Interrupted by SIGINT without an app-level stop request.
 		return StatusCanceled, ""
-	case 10:
+	case resticExitNotInitialized:
 		return StatusFailed, "repository is not initialized"
-	case 11:
+	case resticExitLocked:
 		return StatusFailed, "repository is locked by another operation"
-	case 12:
+	case resticExitBadPassword:
 		return StatusFailed, "wrong repository password"
 	default:
 		return StatusFailed, fmt.Sprintf("restic exited with code %d", code)

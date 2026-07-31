@@ -72,14 +72,21 @@ type fakeRunner struct {
 	// streamFn drives Backup/Restore. If nil, the op succeeds immediately.
 	streamFn func(ctx context.Context, kind RunKind, sink RunSink) (int, error)
 
-	mu       sync.Mutex
-	snapTags []string // tags passed to Snapshots, for assertions
+	mu        sync.Mutex
+	snapTags  []string // tags passed to Snapshots, for assertions
+	initCount int      // number of Init calls, for assertions
 }
 
 func (f *fakeRunner) recordedTags() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.snapTags...)
+}
+
+func (f *fakeRunner) initCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.initCount
 }
 
 func (f *fakeRunner) Available() bool { return f.installed }
@@ -89,6 +96,9 @@ func (f *fakeRunner) Version(ctx context.Context) (string, error) { return f.ver
 func (f *fakeRunner) Test(ctx context.Context, repo *Repository) TestResult { return f.testResult }
 
 func (f *fakeRunner) Init(ctx context.Context, repo *Repository) (string, error) {
+	f.mu.Lock()
+	f.initCount++
+	f.mu.Unlock()
 	return f.initOut, f.initErr
 }
 

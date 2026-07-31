@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -26,6 +27,10 @@ case "$cmd" in
     if [ -f "$repo/snaps.json" ]; then cat "$repo/snaps.json"; else echo "[]"; fi; exit 0 ;;
   "backup")
     src="$1"
+    if [ ! -f "$repo/config" ]; then
+      echo '{"message_type":"exit_error","code":10,"message":"Fatal: repository does not exist: unable to open config file"}' 1>&2
+      exit 10
+    fi
     echo "Warn: could not read some file" 1>&2
     echo '{"message_type":"status","percent_done":0.5,"total_files":4,"files_done":2,"total_bytes":2048,"bytes_done":1024,"current_files":["'"$src"'/a"]}'
     echo '{"message_type":"summary","files_new":4,"files_changed":0,"files_unmodified":0,"data_added":2048,"total_files_processed":4,"total_bytes_processed":2048,"total_duration":0.1,"snapshot_id":"deadbeefcafe0001"}'
@@ -160,5 +165,40 @@ func TestRealRunnerBackupThroughCoordinator(t *testing.T) {
 	lines, _ := app.runs.ReadLog(run.ID, 0)
 	if len(lines) == 0 {
 		t.Fatal("no durable log lines from a real backup")
+	}
+}
+
+// TestRealRunnerBackupAutoInitializes runs a backup against a repository that was
+// never initialized: the fake restic exits 10, the coordinator initializes the
+// repo and retries, and the run succeeds — the full production auto-init path.
+func TestRealRunnerBackupAutoInitializes(t *testing.T) {
+	installFakeRestic(t)
+	app, err := newAppWithRunner(t.TempDir(), newResticRunner())
+	if err != nil {
+		t.Fatalf("newAppWithRunner: %v", err)
+	}
+	// Deliberately NOT initialized.
+	repo, _ := app.repos.Create(Repository{Meta: Meta{Name: "R"}, BackendType: "Local", LocalPath: filepath.Join(t.TempDir(), "repo"), Password: "pw"})
+	folder, _ := app.folders.Create(Folder{Meta: Meta{Name: "F"}, Path: t.TempDir()})
+	job, _ := app.jobs.Create(Job{Meta: Meta{Name: "J"}, FolderID: folder.ID, RepositoryID: repo.ID})
+
+	run, err := app.coord.StartBackup(job.ID)
+	if err != nil {
+		t.Fatalf("StartBackup: %v", err)
+	}
+	final := waitForStatus(t, app.runs, run.ID, StatusSuccess, 5*time.Second)
+	if final.Summary == nil || final.Summary.SnapshotID == "" {
+		t.Fatalf("auto-init backup produced no snapshot: %+v", final.Summary)
+	}
+	// The log should record the automatic initialization.
+	lines, _ := app.runs.ReadLog(run.ID, 0)
+	var sawInit bool
+	for _, l := range lines {
+		if strings.Contains(l.Message, "initializing it now") || strings.Contains(l.Message, "Repository initialized") {
+			sawInit = true
+		}
+	}
+	if !sawInit {
+		t.Fatal("auto-init was not recorded in the run log")
 	}
 }

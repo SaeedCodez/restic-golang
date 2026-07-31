@@ -17,6 +17,16 @@ import (
 // resticBinary is the name of the restic executable, resolved from PATH.
 const resticBinary = "restic"
 
+// restic exit codes we classify (restic >= ~0.17.1). Older restic returns 1 with
+// a stderr message, handled by the fallback path.
+const (
+	resticExitWarnings       = 3   // backup completed but some files were unreadable
+	resticExitNotInitialized = 10  // repository does not exist
+	resticExitLocked         = 11  // failed to lock the repository
+	resticExitBadPassword    = 12  // wrong password
+	resticExitInterrupted    = 130 // interrupted by SIGINT
+)
+
 // resticInstalled reports whether the restic binary is available on PATH.
 func resticInstalled() bool {
 	_, err := exec.LookPath(resticBinary)
@@ -156,6 +166,10 @@ type resticMessage struct {
 	} `json:"error"`
 	During string `json:"during"`
 	Item   string `json:"item"`
+
+	// exit_error (a fatal backup error; restic also exits with Code)
+	Code    int    `json:"code"`
+	Message string `json:"message"`
 }
 
 // firstLine returns the first non-empty line of s, useful for terse errors.

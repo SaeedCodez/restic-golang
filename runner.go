@@ -199,9 +199,19 @@ func streamRestic(ctx context.Context, repo *Repository, kind RunKind, sink RunS
 		sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for sc.Scan() {
 			line := strings.TrimSpace(sc.Text())
-			if line != "" {
-				sink.Log("warn", "stderr", line)
+			if line == "" {
+				continue
 			}
+			// restic may emit structured JSON (e.g. an exit_error) on stderr; route
+			// it through the mapper so it reads cleanly instead of as raw JSON.
+			if strings.HasPrefix(line, "{") {
+				var m resticMessage
+				if err := json.Unmarshal([]byte(line), &m); err == nil && m.MessageType != "" {
+					mapResticMessage(kind, &m, sink)
+					continue
+				}
+			}
+			sink.Log("warn", "stderr", line)
 		}
 		// Keep draining even if the scanner aborted (e.g. an over-long line), so
 		// restic can never block writing to a full pipe and wedge cmd.Wait.
@@ -291,6 +301,14 @@ func mapResticMessage(kind RunKind, m *resticMessage, sink RunSink) {
 			msg += " (" + m.Item + ")"
 		}
 		sink.Log("error", "stdout", msg)
+
+	case "exit_error":
+		// A fatal error restic reports as JSON (e.g. repository not initialized).
+		msg := strings.TrimSpace(m.Message)
+		if msg == "" {
+			msg = "fatal error"
+		}
+		sink.Log("error", "stdout", firstLine(msg))
 	}
 }
 
