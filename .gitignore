@@ -6,3 +6,6 @@
 
 # Default local repository directory
 /restic-repo/
+
+# New app state directory
+/data/

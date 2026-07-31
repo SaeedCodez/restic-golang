@@ -157,11 +157,14 @@ func TestFolderAndJobStores(t *testing.T) {
 	if err != nil {
 		t.Fatalf("job store: %v", err)
 	}
-	j, err := js.Create(Job{Meta: Meta{Name: "Nightly"}, FolderID: f.ID, RepositoryID: "repo1", Tag: "resticweb-job:x"})
+	j, err := js.Create(Job{Meta: Meta{Name: "Nightly"}, FolderID: f.ID, RepositoryID: "repo1"})
 	if err != nil {
 		t.Fatalf("create job: %v", err)
 	}
 	if j.FolderID != f.ID || j.RepositoryID != "repo1" {
 		t.Fatalf("job references wrong: %+v", j)
+	}
+	if j.ResticTag() != "resticweb-job:"+j.ID {
+		t.Fatalf("ResticTag = %q", j.ResticTag())
 	}
 }

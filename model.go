@@ -150,16 +150,18 @@ func (f *Folder) Validate() error {
 // ---- Job -------------------------------------------------------------------
 
 // Job is the core concept: a saved, named pairing of one Folder and one
-// Repository. It is the thing the user runs, views and returns to. Tag is an
-// immutable per-job restic tag used to associate every snapshot this job creates
-// with the job, so a job's history is discoverable from the repository itself
-// (restic snapshots --tag) even if this app's state is lost.
+// Repository. It is the thing the user runs, views and returns to.
 type Job struct {
 	Meta
 	FolderID     string `json:"folderId"`
 	RepositoryID string `json:"repositoryId"`
-	Tag          string `json:"tag"`
 }
+
+// ResticTag is the immutable per-job restic tag stamped on every snapshot this
+// job creates, so a job's snapshots are discoverable from the repository itself
+// (restic snapshots --tag) even if this app's state is lost. It is derived from
+// the job's immutable id, so it is stable across renames without being stored.
+func (j *Job) ResticTag() string { return "resticweb-job:" + j.ID }
 
 // Validate checks that the job names a folder and a repository.
 func (j *Job) Validate() error {

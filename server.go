@@ -17,12 +17,16 @@ import (
 
 // Server holds the shared state for all HTTP handlers.
 type Server struct {
+	app *App
+
+	// Legacy demo state, kept while the single-config backup/restore path is
+	// migrated to jobs and runs. Removed once runs replace it.
 	store *ConfigStore
 	hub   *Hub
 }
 
-func newServer(store *ConfigStore, hub *Hub) *Server {
-	return &Server{store: store, hub: hub}
+func newServer(app *App, store *ConfigStore, hub *Hub) *Server {
+	return &Server{app: app, store: store, hub: hub}
 }
 
 // routes registers every endpoint on a fresh mux. Static UI files are served
@@ -30,6 +34,26 @@ func newServer(store *ConfigStore, hub *Hub) *Server {
 func (s *Server) routes(static http.Handler) http.Handler {
 	mux := http.NewServeMux()
 
+	// Entity management (repositories, folders, jobs).
+	mux.HandleFunc("GET /api/repositories", s.handleRepoList)
+	mux.HandleFunc("POST /api/repositories", s.handleRepoCreate)
+	mux.HandleFunc("GET /api/repositories/{id}", s.handleRepoGet)
+	mux.HandleFunc("PUT /api/repositories/{id}", s.handleRepoUpdate)
+	mux.HandleFunc("DELETE /api/repositories/{id}", s.handleRepoDelete)
+
+	mux.HandleFunc("GET /api/folders", s.handleFolderList)
+	mux.HandleFunc("POST /api/folders", s.handleFolderCreate)
+	mux.HandleFunc("GET /api/folders/{id}", s.handleFolderGet)
+	mux.HandleFunc("PUT /api/folders/{id}", s.handleFolderUpdate)
+	mux.HandleFunc("DELETE /api/folders/{id}", s.handleFolderDelete)
+
+	mux.HandleFunc("GET /api/jobs", s.handleJobList)
+	mux.HandleFunc("POST /api/jobs", s.handleJobCreate)
+	mux.HandleFunc("GET /api/jobs/{id}", s.handleJobGet)
+	mux.HandleFunc("PUT /api/jobs/{id}", s.handleJobUpdate)
+	mux.HandleFunc("DELETE /api/jobs/{id}", s.handleJobDelete)
+
+	// Legacy demo endpoints (single config). Being migrated to jobs/runs.
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/settings", s.handleSettings)
 	mux.HandleFunc("/api/test", s.handleTest)
