@@ -9,19 +9,30 @@ import (
 	"strings"
 )
 
-// App is the central container of the server's dependencies. It owns the three
-// entity stores today; later steps add the run store, restic runner and
-// coordinator here so every handler reaches its collaborators through one place.
+// App is the central container of the server's dependencies: the three entity
+// stores, the run store, the restic runner and the coordinator. Every handler
+// reaches its collaborators through one place.
 type App struct {
 	dataDir string
 
 	repos   *EntityStore[Repository, *Repository]
 	folders *EntityStore[Folder, *Folder]
 	jobs    *EntityStore[Job, *Job]
+
+	runs   *RunStore
+	runner Runner
+	bus    eventBus
+	coord  *Coordinator
 }
 
-// newApp loads (or initializes) all entity stores under dataDir.
+// newApp builds an App backed by the real restic runner.
 func newApp(dataDir string) (*App, error) {
+	return newAppWithRunner(dataDir, newResticRunner())
+}
+
+// newAppWithRunner builds an App with a caller-supplied Runner, so tests can
+// inject a fake and exercise the whole pipeline with no restic binary.
+func newAppWithRunner(dataDir string, runner Runner) (*App, error) {
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return nil, fmt.Errorf("could not create data directory %q: %w", dataDir, err)
 	}
@@ -39,7 +50,15 @@ func newApp(dataDir string) (*App, error) {
 		return nil, err
 	}
 
-	return &App{dataDir: dataDir, repos: repos, folders: folders, jobs: jobs}, nil
+	bus := eventBus(noopBus{})
+	runs, err := newRunStore(filepath.Join(dataDir, "runs"), bus)
+	if err != nil {
+		return nil, err
+	}
+
+	app := &App{dataDir: dataDir, repos: repos, folders: folders, jobs: jobs, runs: runs, runner: runner, bus: bus}
+	app.coord = newCoordinator(app, runs, runner, bus)
+	return app, nil
 }
 
 // jobsUsingRepository returns the jobs that reference the given repository id.

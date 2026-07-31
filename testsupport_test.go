@@ -101,16 +101,27 @@ func (f *fakeRunner) Restore(ctx context.Context, repo *Repository, snapshotID, 
 	return 0, nil
 }
 
-// blockUntilCancel is a streamFn that emits an initial progress line then blocks
-// until the context is canceled, returning exit code 130 (restic's SIGINT code).
-func blockUntilCancel(started chan<- struct{}) func(ctx context.Context, kind RunKind, sink RunSink) (int, error) {
+// gatedStream is a streamFn that emits an initial log + progress line, signals
+// on started (non-blocking, so it is safe when shared across concurrent runs),
+// then waits: a canceled context returns 130 (restic's SIGINT code), while a
+// closed release channel emits a summary and returns exit code 0. It lets a test
+// hold an operation "running" and then let it finish or be stopped.
+func gatedStream(started chan<- struct{}, release <-chan struct{}) func(ctx context.Context, kind RunKind, sink RunSink) (int, error) {
 	return func(ctx context.Context, kind RunKind, sink RunSink) (int, error) {
-		sink.Log("info", "system", "started")
-		sink.Progress(Progress{Percent: 0.1, TotalBytes: 100})
+		sink.Log("info", "system", "working")
+		sink.Progress(Progress{Percent: 0.5, FilesDone: 1, TotalFiles: 2, BytesDone: 50, TotalBytes: 100})
 		if started != nil {
-			close(started)
+			select {
+			case started <- struct{}{}:
+			default:
+			}
 		}
-		<-ctx.Done()
-		return 130, nil
+		select {
+		case <-ctx.Done():
+			return 130, nil
+		case <-release:
+			sink.Summary(Summary{SnapshotID: "snap-gated", FilesNew: 2, DataAdded: 50, TotalDuration: 0.1})
+			return 0, nil
+		}
 	}
 }

@@ -32,9 +32,9 @@ type ValidationError struct{ Msg string }
 
 func (e *ValidationError) Error() string { return e.Msg }
 
-func conflictf(format string, a ...any) error  { return &ConflictError{Msg: fmt.Sprintf(format, a...)} }
-func notFoundf(format string, a ...any) error  { return &NotFoundError{Msg: fmt.Sprintf(format, a...)} }
-func validf(format string, a ...any) error     { return &ValidationError{Msg: fmt.Sprintf(format, a...)} }
+func conflictf(format string, a ...any) error { return &ConflictError{Msg: fmt.Sprintf(format, a...)} }
+func notFoundf(format string, a ...any) error { return &NotFoundError{Msg: fmt.Sprintf(format, a...)} }
+func validf(format string, a ...any) error    { return &ValidationError{Msg: fmt.Sprintf(format, a...)} }
 
 // ---- id generation ---------------------------------------------------------
 

@@ -53,6 +53,13 @@ func (s *Server) routes(static http.Handler) http.Handler {
 	mux.HandleFunc("PUT /api/jobs/{id}", s.handleJobUpdate)
 	mux.HandleFunc("DELETE /api/jobs/{id}", s.handleJobDelete)
 
+	// Runs: every long-running operation is a run, watched the same way.
+	mux.HandleFunc("POST /api/jobs/{id}/run", s.handleJobRun)
+	mux.HandleFunc("GET /api/jobs/{id}/runs", s.handleJobRuns)
+	mux.HandleFunc("GET /api/runs", s.handleRunList)
+	mux.HandleFunc("GET /api/runs/{id}", s.handleRunGet)
+	mux.HandleFunc("GET /api/runs/{id}/log", s.handleRunLog)
+
 	// Legacy demo endpoints (single config). Being migrated to jobs/runs.
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/settings", s.handleSettings)

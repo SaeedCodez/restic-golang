@@ -274,6 +274,10 @@ type Run struct {
 	StartedAt  time.Time  `json:"startedAt"`
 	FinishedAt *time.Time `json:"finishedAt,omitempty"`
 
+	// PID is the restic child process id (its own process-group leader), persisted
+	// so startup reconciliation can reap an orphan a crash may have left behind.
+	PID int `json:"pid,omitempty"`
+
 	Progress Progress `json:"progress"`
 	Summary  *Summary `json:"summary,omitempty"`
 

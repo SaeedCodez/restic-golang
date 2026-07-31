@@ -105,8 +105,9 @@ func TestResticRunnerBackupNoBinary(t *testing.T) {
 // TestFakeRunnerHonorsCancel confirms the fake's blocking stream returns when the
 // context is canceled — the primitive later steps rely on for stop/reconcile.
 func TestFakeRunnerHonorsCancel(t *testing.T) {
-	started := make(chan struct{})
-	f := &fakeRunner{installed: true, streamFn: blockUntilCancel(started)}
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	f := &fakeRunner{installed: true, streamFn: gatedStream(started, release)}
 	sink := &captureSink{}
 
 	ctx, cancel := context.WithCancel(context.Background())

@@ -118,9 +118,9 @@ func TestRunStatusTerminal(t *testing.T) {
 func TestRunCloneIsDeep(t *testing.T) {
 	code := 3
 	orig := &Run{
-		ID:      "r1",
-		Params:  map[string]string{"source": "/x"},
-		Summary: &Summary{SnapshotID: "abc"},
+		ID:       "r1",
+		Params:   map[string]string{"source": "/x"},
+		Summary:  &Summary{SnapshotID: "abc"},
 		ExitCode: &code,
 	}
 	cp := orig.clone()
