@@ -1,151 +1,154 @@
-# restic backup demo
+# restic backup manager
 
-A small **local web app** that demonstrates [restic](https://restic.net)-based
-**incremental backups**. The Go server wraps the `restic` command-line tool —
-restic does all the real work (deduplication, chunking, encryption) — and serves
-a clean single-page UI for configuring a repository, running backups, browsing
-snapshots, restoring, and downloading any snapshot as a zip, all with **live
-progress**.
+A **local web app** for managing [restic](https://restic.net)-based **incremental
+backups**. The Go server wraps the `restic` command-line tool — restic does all
+the real work (deduplication, chunking, encryption) — and serves a single-page UI
+built around three things you create and manage:
+
+- **Storage repositories** — several named places to store backups, added and
+  edited in the app.
+- **Backup folders** — named, reusable source folders.
+- **Backup jobs** — the core concept: a saved, named pairing of one folder and
+  one repository. A job is the thing you run, look at, and come back to.
+
+Everything long-running — backups, restores, repository setup, and old-snapshot
+restores/downloads — is a **run**: a durable record with its own live progress
+and a permanent log. History survives restarts; a job in progress still shows as
+running (with live progress and log) after a refresh, a second tab, or an hour
+away; and if the app is killed mid-backup it never comes back claiming something
+is still running.
 
 This is a single-user tool meant to run on your own machine, so there is no
 authentication.
 
 ---
 
-## What it can do
-
-- **Pick a folder** and back it up. The first run stores everything; every later
-  run is automatically **incremental** — restic only stores what changed.
-- **Live progress** while a backup or restore runs: a progress bar, the current
-  phase, files/bytes processed, a streaming log, and a final summary
-  (files new / changed / unchanged, data added, snapshot ID, duration).
-- **List snapshots** with their time, source paths, size and file count.
-- **Restore** any snapshot to a folder you choose, with progress.
-- **Download** any snapshot as a `.zip` (restored to a temp folder, zipped,
-  streamed to your browser, then cleaned up).
-- Two storage backends: an **S3-compatible** object store, or a **Local
-  directory** so you can try the demo immediately with no credentials.
-
-### Seeing the incremental behavior
-
-1. Back up a folder once — the summary shows every file as **new**.
-2. Change one file in that folder.
-3. Back it up again — the summary now shows most files as **unchanged** and only
-   a small amount of **data added**. The app highlights this explicitly.
-
----
-
 ## Prerequisites
 
 1. **Go** 1.23 or newer — <https://go.dev/dl/>
-2. **restic** must be installed and on your `PATH`. The app detects when it is
-   missing and shows a clear message. Install it with one of:
-
-   | Platform        | Command                                  |
-   | --------------- | ---------------------------------------- |
-   | macOS (Homebrew) | `brew install restic`                   |
-   | Debian / Ubuntu | `sudo apt install restic`                |
-   | Fedora          | `sudo dnf install restic`                |
-   | Windows (Scoop) | `scoop install restic`                   |
-   | Any             | Download a binary from <https://github.com/restic/restic/releases> |
-
-   Verify it works:
-
-   ```sh
-   restic version
-   ```
-
----
+2. **restic** on your `PATH`. The app detects when it is missing and shows a clear
+   message. Install it with `brew install restic`, `apt install restic`,
+   `dnf install restic`, `scoop install restic`, or a binary from
+   <https://github.com/restic/restic/releases>. Verify with `restic version`.
 
 ## How to run
-
-From this directory:
 
 ```sh
 go run .
 ```
 
-Then open the URL it prints (default):
-
-```
-http://127.0.0.1:8080
-```
-
-To use a different address or config file:
+Then open the printed URL (default `http://127.0.0.1:8080`). Flags:
 
 ```sh
-go run . -addr 127.0.0.1:9000 -config ./myconfig.json
+go run . -addr 127.0.0.1:9000 -data ./data
 ```
 
-You can also build a standalone binary (the web UI is embedded into it):
+- `-addr` — address to listen on.
+- `-data` — directory for persisted state (default `./data`).
+- `-config` — a legacy `config.json` to import once into a "Default" repository.
+
+Build a standalone binary (the web UI is embedded):
 
 ```sh
-go build -o restic-web .
-./restic-web
+go build -o restic-web . && ./restic-web
 ```
+
+## Quick start (Local backend — no credentials)
+
+1. **Repositories** → add a repository, backend **Local directory**, pick a folder
+   (e.g. `./restic-repo`), set a password, save. Open it and **Initialize**.
+2. **Folders** → add a folder with the absolute path you want to back up.
+3. **Jobs** → create a job pairing that folder and that repository.
+4. Open the job and **Run backup**. Watch the live run; its history and snapshots
+   appear on the job page.
+5. Change a file and run again to see an incremental backup (mostly *unchanged*,
+   only a little *data added*).
+
+For **S3**, add a repository with backend **S3-compatible** and fill in the
+endpoint, bucket, optional region, access key, secret key, and password.
+Credentials are always passed to restic through the process **environment**
+(`RESTIC_PASSWORD`, `AWS_*`), never on the command line.
 
 ---
 
-## Quick start (Local backend — no credentials needed)
+## Architecture
 
-1. Open the app and go to **Settings**.
-2. Leave the backend as **Local directory** and pick a repository folder, e.g.
-   `./restic-repo` (the default).
-3. Enter a **repository password** (used to encrypt the backups — don't lose it)
-   and click **Save settings**.
-4. Click **Test connection**. If the repository doesn't exist yet, an
-   **Initialize repository** button appears — click it.
-5. Go to **Backup**, enter the absolute path of a folder to back up, and click
-   **Start backup**. Watch the live progress and summary.
-6. Go to **Snapshots** to see your snapshot. Use **Restore** or **Download**.
-7. Change a file in the source folder and back up again to see an incremental run.
+Dependency-free Go (standard library only); state is plain files under the data
+directory.
 
-### Using S3 instead
+```
+data/
+├── repositories.json        named storage locations   (atomic temp+rename, fsync)
+├── folders.json             named source folders
+├── jobs.json                folder + repository pairings
+└── runs/<runId>/
+    ├── run.json             the authoritative run record (status, progress, summary)
+    └── log.jsonl            the append-only, permanent log
+```
 
-In **Settings**, switch the backend to **S3-compatible** and fill in the
-endpoint URL (e.g. `https://s3.amazonaws.com` or a MinIO endpoint), bucket,
-optional region, access key, and secret key, plus the repository password. The
-app maps these to the restic repository string `s3:<endpoint>/<bucket>` and
-passes credentials via environment variables — never on the command line.
+- **The durable run record is the single source of truth** for whether an
+  operation is running. An in-memory handle exists only to stream output and to
+  stop a run; it is never consulted to answer "is it running", so any browser,
+  tab, or later visit reconstructs exact state from disk.
+- **Per-repository serialization.** Two jobs targeting different repositories run
+  in parallel; a second operation on a busy repository is refused with a clear
+  message naming the blocker. (This is the app's policy — restic's backup/restore
+  locks are non-exclusive — chosen for clarity and future prune/forget headroom.)
+- **Crash honesty.** On startup, before serving, any run still marked running is
+  reconciled to *interrupted*, and an orphaned restic child (identified via
+  `/proc` on Linux) is reaped; affected repositories get a stale-only
+  `restic unlock`.
+- **Stop** sends restic `SIGINT` (clean: no partial snapshot, lock released) with
+  a hard-kill fallback.
+- **Live sync** is Server-Sent Events. A per-run stream replays the durable log
+  backlog then tails live, resuming exactly via `Last-Event-ID`; a global stream
+  drives list badges. Live delivery is a pure accelerator — the durable record is
+  always the catch-up source.
+- **Job ↔ snapshot** association is a stable per-job restic tag
+  (`resticweb-job:<id>`), so a job's snapshots are discoverable from the
+  repository itself.
 
----
+### Code layout
+
+```
+main.go            entry point: flags, embedded UI, startup reconcile, HTTP server
+model.go           domain types: Repository, Folder, Job, Run, LogLine
+store.go           generic entity file store (atomic, fsync'd) + typed errors
+app.go             dependency container + legacy config import
+runstore.go        durable run records + append-only logs + reconcile + retention
+coordinator.go     per-repository locking; drives every run kind
+runner.go          Runner interface + real restic runner (streaming) + exit codes
+restic.go          stateless restic helpers (message/snapshot parsing, classification)
+broadcaster.go     history-free SSE fan-out (the event bus)
+reconcile.go       startup crash recovery + orphan reaping
+server.go          routing + shared HTTP helpers
+handlers_*.go      HTTP handlers: entities, runs, repo ops, SSE, status
+sysproc_*.go       process-group setup / signalling (unix, windows)
+reap_*.go          orphan identification (linux via /proc; no-op elsewhere)
+web/               single-page UI (HTML + CSS + vanilla JS), embedded
+```
 
 ## How it maps to restic
 
 | Action          | Command run                                              |
 | --------------- | ------------------------------------------------------- |
-| Initialize      | `restic -r <repo> init`                                 |
-| Backup          | `restic -r <repo> backup <sourceDir> --json`            |
-| List snapshots  | `restic -r <repo> snapshots --json`                     |
-| Restore         | `restic -r <repo> restore <id> --target <dir> --json`   |
-| Download (zip)  | `restic -r <repo> restore <id> --target <tempDir>` then zip |
 | Test connection | `restic -r <repo> cat config`                           |
-
-Credentials are always supplied through the command's **environment**
-(`RESTIC_PASSWORD`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
-`AWS_DEFAULT_REGION`), so secrets never appear in a process listing or shell
-history.
-
----
-
-## Project layout
-
-```
-.
-├── main.go      — entry point: flags, embedded UI, HTTP server
-├── config.go    — settings model + JSON persistence + restic repo/env mapping
-├── restic.go    — restic CLI wrapper: init, test, list, streaming backup/restore
-├── hub.go       — SSE hub + single-operation "busy" lock with history replay
-├── server.go    — HTTP handlers, SSE endpoint, zip download
-└── web/         — single-page UI (HTML + CSS + vanilla JS), embedded into the binary
-```
+| Initialize      | `restic -r <repo> init`                                 |
+| Backup          | `restic -r <repo> backup <src> --tag resticweb-job:<id> --json` |
+| List snapshots  | `restic -r <repo> snapshots [--tag …] --json`           |
+| Restore         | `restic -r <repo> restore <id> --target <dir> --json`   |
+| Download (zip)  | restore into a temp workspace, then stream a zip        |
+| Unlock          | `restic -r <repo> unlock` (removes only stale locks)    |
 
 ## Notes & limitations
 
-- Only **one** backup/restore/download runs at a time; the UI shows a clear busy
-  state and the server rejects concurrent operations.
-- Settings (including the repository password and S3 secret) are stored in
-  `config.json` in the working directory **in plaintext**. That is fine for a
-  local single-user demo but not for shared or production use.
-- A browser cannot give the server a real local path from a file picker, so
-  source and target folders are entered as text fields (absolute paths).
+- Secrets (repository passwords, S3 secret keys) are stored **in plaintext** in
+  the data directory (files are `0600`). Fine for a local single-user tool; not
+  for shared or production use. They are read through a single choke point, so
+  encrypting at rest later is a localized change.
+- Retention keeps the newest 100 runs per job on startup; download workspaces are
+  ephemeral and wiped on startup.
+- A browser cannot hand the server a real local path, so source and target
+  folders are entered as absolute-path text fields.
+- restic must be the sole writer per repository for the stale-lock handling to be
+  safe.
