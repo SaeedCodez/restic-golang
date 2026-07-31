@@ -47,6 +47,11 @@ func main() {
 	}
 	static := http.FileServer(http.FS(uiFS))
 
+	// Make the durable run records honest before accepting any traffic: any run
+	// still marked running when the previous process died is marked interrupted,
+	// and orphaned restic children are reaped.
+	app.Reconcile()
+
 	hub := newHub()
 	srv := newServer(app, store, hub)
 

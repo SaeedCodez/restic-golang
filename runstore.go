@@ -164,6 +164,74 @@ func (s *RunStore) writeRunLocked(run *Run) error {
 	return writeJSONFileAtomic(s.runPath(run.ID), run)
 }
 
+// AppendSystemLine appends a system log line to a run's log, continuing the
+// per-run seq. Used by reconcile, where no live handle exists to own the seq.
+func (s *RunStore) AppendSystemLine(id, level, message string) {
+	lines, _ := s.ReadLog(id, 0)
+	next := int64(1)
+	if n := len(lines); n > 0 {
+		next = lines[n-1].Seq + 1
+	}
+	line := LogLine{Seq: next, TS: time.Now().UTC(), Stream: "system", Level: level, Message: message}
+	data, err := json.Marshal(line)
+	if err != nil {
+		return
+	}
+	f, err := os.OpenFile(s.logPath(id), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return
+	}
+	_, _ = f.Write(append(data, '\n'))
+	_ = f.Sync()
+	_ = f.Close()
+	s.bus.publishLog(id, line)
+}
+
+// reconcile makes the durable records honest on startup: every run still marked
+// active is marked interrupted (after reaping any orphaned restic child a crash
+// left behind). It returns the repository ids that had interrupted runs, for a
+// best-effort stale-lock cleanup. It runs before the server accepts traffic, so
+// no concurrent run activity races it.
+func (s *RunStore) reconcile(reap func(pid int) bool) []string {
+	type item struct {
+		id, repoID string
+		pid        int
+	}
+	var items []item
+	s.mu.RLock()
+	for _, run := range s.index {
+		if run.Status.Active() {
+			items = append(items, item{run.ID, run.RepositoryID, run.PID})
+		}
+	}
+	s.mu.RUnlock()
+
+	repoSet := map[string]bool{}
+	for _, it := range items {
+		if reap != nil && reap(it.pid) {
+			s.AppendSystemLine(it.id, "warn", "Reaped an orphaned restic process left running by a previous app instance.")
+		}
+		s.AppendSystemLine(it.id, "error", "The application was restarted while this run was in progress; marking it interrupted.")
+		now := time.Now().UTC()
+		s.mutate(it.id, true, func(r *Run) {
+			r.Status = StatusInterrupted
+			r.FinishedAt = &now
+			if r.Error == "" {
+				r.Error = "interrupted: the application restarted while this run was in progress"
+			}
+		})
+		if it.repoID != "" {
+			repoSet[it.repoID] = true
+		}
+	}
+
+	repos := make([]string, 0, len(repoSet))
+	for id := range repoSet {
+		repos = append(repos, id)
+	}
+	return repos
+}
+
 // Begin creates a new run: it assigns a time-sortable id, writes run.json,
 // opens the append-only log, indexes the run and returns a live handle the
 // coordinator uses to stream events into the durable record.
