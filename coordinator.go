@@ -146,6 +146,47 @@ func (c *Coordinator) drive(ctx context.Context, ar *activeRun, exec runExec) {
 	ar.handle.finalize(status, code, errMsg)
 }
 
+// errRunNotActive means a stop was requested for a run that is not currently
+// running in this process (already finished, or never started here).
+var errRunNotActive = errors.New("run is not currently running")
+
+// Stop requests a graceful stop of a running operation. It marks the run's
+// in-memory handle stopped (so the terminal status is classified as canceled),
+// records the intent in the durable log, and cancels the context — which sends
+// restic SIGINT (clean: no partial snapshot, lock released) with a hard-kill
+// fallback. It is idempotent: a repeated stop does not re-log or re-signal.
+func (c *Coordinator) Stop(runID string) error {
+	// The durable record is authoritative: if the run is unknown or already in a
+	// terminal state, it cannot be stopped — even during the brief window where
+	// its in-memory handle has not yet been released.
+	if run, ok := c.store.Get(runID); !ok || run.Status.Terminal() {
+		return errRunNotActive
+	}
+
+	c.mu.Lock()
+	var target *activeRun
+	for _, ar := range c.active {
+		if ar.runID == runID {
+			target = ar
+			break
+		}
+	}
+	if target == nil {
+		c.mu.Unlock()
+		return errRunNotActive
+	}
+	already := target.stopped.Swap(true)
+	cancel := target.cancel
+	handle := target.handle
+	c.mu.Unlock()
+
+	if !already {
+		handle.Log("warn", "system", "Stop requested by user.")
+		cancel()
+	}
+	return nil
+}
+
 // finish releases the repository slot when a run ends.
 func (c *Coordinator) finish(ar *activeRun) {
 	c.mu.Lock()

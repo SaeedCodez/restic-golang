@@ -59,6 +59,7 @@ func (s *Server) routes(static http.Handler) http.Handler {
 	mux.HandleFunc("GET /api/runs", s.handleRunList)
 	mux.HandleFunc("GET /api/runs/{id}", s.handleRunGet)
 	mux.HandleFunc("GET /api/runs/{id}/log", s.handleRunLog)
+	mux.HandleFunc("POST /api/runs/{id}/stop", s.handleRunStop)
 
 	// Legacy demo endpoints (single config). Being migrated to jobs/runs.
 	mux.HandleFunc("/api/status", s.handleStatus)

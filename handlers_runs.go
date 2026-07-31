@@ -71,6 +71,24 @@ func (s *Server) handleRunLog(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "lines": lines})
 }
 
+func (s *Server) handleRunStop(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	err := s.app.coord.Stop(id)
+	if err == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "message": "Stopping…"})
+		return
+	}
+	if errors.Is(err, errRunNotActive) {
+		if _, ok := s.app.runs.Get(id); ok {
+			errorJSON(w, http.StatusConflict, "not_active", "This run has already finished.")
+		} else {
+			errorJSON(w, http.StatusNotFound, "not_found", "run not found")
+		}
+		return
+	}
+	writeStoreError(w, err)
+}
+
 func (s *Server) handleRunList(w http.ResponseWriter, r *http.Request) {
 	var runs []*Run
 	if r.URL.Query().Get("status") == "active" {
