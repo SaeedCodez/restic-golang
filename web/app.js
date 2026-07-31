@@ -1,631 +1,762 @@
 /* ------------------------------------------------------------------ *
- * restic backup demo — front-end logic (vanilla JS)
+ * restic backup manager — front-end (vanilla JS).
  *
- * Talks to the Go server's JSON API and listens to one persistent
- * Server-Sent Events stream for live backup/restore progress.
+ * Hash-routed SPA over the JSON API. Everything long-running is a "run"
+ * watched through one shared view backed by Server-Sent Events, so live
+ * progress and the full log survive refresh, second tabs and restarts.
  * ------------------------------------------------------------------ */
-
 "use strict";
 
 // ---- tiny helpers ----------------------------------------------------------
 
 const $ = (id) => document.getElementById(id);
-const show = (el) => el.classList.remove("hidden");
-const hide = (el) => el.classList.add("hidden");
 
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
-  );
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
-function formatBytes(n) {
+function fmtBytes(n) {
   n = Number(n) || 0;
   if (n < 1024) return n + " B";
-  const units = ["KB", "MB", "GB", "TB"];
+  const u = ["KB", "MB", "GB", "TB"];
   let i = -1;
-  do {
-    n /= 1024;
-    i++;
-  } while (n >= 1024 && i < units.length - 1);
-  return n.toFixed(n < 10 ? 2 : 1) + " " + units[i];
+  do { n /= 1024; i++; } while (n >= 1024 && i < u.length - 1);
+  return n.toFixed(n < 10 ? 2 : 1) + " " + u[i];
 }
 
-function formatDuration(seconds) {
-  seconds = Number(seconds) || 0;
-  if (seconds < 60) return seconds.toFixed(1) + "s";
-  const m = Math.floor(seconds / 60);
-  const s = Math.round(seconds % 60);
-  return m + "m " + s + "s";
+function fmtDur(sec) {
+  sec = Number(sec) || 0;
+  if (sec < 60) return sec.toFixed(1) + "s";
+  const m = Math.floor(sec / 60), s = Math.round(sec % 60);
+  if (m < 60) return m + "m " + s + "s";
+  return Math.floor(m / 60) + "h " + (m % 60) + "m";
 }
 
-function formatTime(iso) {
+function fmtTime(iso) {
   if (!iso) return "—";
   const d = new Date(iso);
-  if (isNaN(d.getTime())) return iso;
-  return d.toLocaleString();
+  return isNaN(d.getTime()) ? iso : d.toLocaleString();
 }
 
-async function getJSON(url, opts) {
-  const resp = await fetch(url, opts);
-  const ct = resp.headers.get("content-type") || "";
-  if (ct.includes("application/json")) return resp.json();
-  return { ok: resp.ok, error: await resp.text() };
+function runDuration(run) {
+  if (!run.startedAt) return "—";
+  const start = new Date(run.startedAt).getTime();
+  const end = run.finishedAt ? new Date(run.finishedAt).getTime() : Date.now();
+  return fmtDur(Math.max(0, (end - start) / 1000));
 }
 
-async function postJSON(url, body) {
-  return getJSON(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body || {}),
-  });
+function shortId(id) { return id ? String(id).slice(0, 8) : ""; }
+
+function statusBadge(status) {
+  const label = {
+    starting: "starting", running: "running", success: "success",
+    success_warnings: "warnings", failed: "failed", canceled: "canceled",
+    interrupted: "interrupted",
+  }[status] || status;
+  return `<span class="badge st-${esc(status)}">${esc(label)}</span>`;
 }
 
-function setResult(el, kind, message, detail) {
-  el.className = "result " + kind; // good | bad | info
-  el.innerHTML =
-    escapeHtml(message) +
-    (detail ? '<span class="detail">' + escapeHtml(detail) + "</span>" : "");
-  show(el);
+function isActive(status) { return status === "running" || status === "starting"; }
+
+async function req(method, url, body) {
+  const opt = { method };
+  if (body !== undefined) {
+    opt.headers = { "Content-Type": "application/json" };
+    opt.body = JSON.stringify(body);
+  }
+  const r = await fetch(url, opt);
+  const ct = r.headers.get("content-type") || "";
+  const b = ct.includes("application/json") ? await r.json() : { error: await r.text() };
+  return { status: r.status, ok: r.ok, body: b };
 }
+
+const get = (u) => req("GET", u);
+const post = (u, b) => req("POST", u, b || {});
+const put = (u, b) => req("PUT", u, b);
+const del = (u) => req("DELETE", u);
 
 // ---- shared state ----------------------------------------------------------
 
-const state = {
+const app = {
   resticInstalled: false,
-  configValid: false,
-  busy: false,
-  busyOp: "",
-  repository: "",
-  snapshots: [],
+  activeRuns: new Map(), // runId -> status
 };
 
-// Cached per-operation progress elements.
-const els = {};
+// ---- boot & status ---------------------------------------------------------
 
-// ---- tab navigation --------------------------------------------------------
-
-function setupTabs() {
-  document.querySelectorAll(".tab").forEach((btn) => {
-    btn.addEventListener("click", () => switchTab(btn.dataset.tab));
-  });
-}
-
-function switchTab(name) {
-  document.querySelectorAll(".tab").forEach((b) =>
-    b.classList.toggle("active", b.dataset.tab === name)
-  );
-  document.querySelectorAll(".tabpanel").forEach((p) =>
-    p.classList.toggle("active", p.id === "tab-" + name)
-  );
-}
-
-// ---- settings --------------------------------------------------------------
-
-function setupBackendToggle() {
-  document.querySelectorAll("#backendToggle .seg").forEach((seg) => {
-    seg.addEventListener("click", () => selectBackend(seg.dataset.backend));
-  });
-}
-
-function selectBackend(type) {
-  document.querySelectorAll("#backendToggle .seg").forEach((s) =>
-    s.classList.toggle("active", s.dataset.backend === type)
-  );
-  $("localFields").classList.toggle("hidden", type !== "Local");
-  $("s3Fields").classList.toggle("hidden", type !== "S3");
-}
-
-function currentBackend() {
-  const active = document.querySelector("#backendToggle .seg.active");
-  return active ? active.dataset.backend : "Local";
-}
-
-async function loadSettings() {
-  const data = await getJSON("/api/settings");
-  if (!data.ok) return;
-  const c = data.settings || {};
-  selectBackend(c.backendType || "Local");
-  $("localPath").value = c.localPath || "";
-  $("endpoint").value = c.endpoint || "";
-  $("bucket").value = c.bucket || "";
-  $("region").value = c.region || "";
-  $("accessKey").value = c.accessKey || "";
-  $("secretKey").value = c.secretKey || "";
-  $("password").value = c.password || "";
-}
-
-function gatherSettings() {
-  return {
-    backendType: currentBackend(),
-    localPath: $("localPath").value.trim(),
-    endpoint: $("endpoint").value.trim(),
-    bucket: $("bucket").value.trim(),
-    region: $("region").value.trim(),
-    accessKey: $("accessKey").value.trim(),
-    secretKey: $("secretKey").value,
-    password: $("password").value,
-  };
-}
-
-async function saveSettings() {
-  const res = $("settingsResult");
-  const data = await postJSON("/api/settings", gatherSettings());
-  if (data.ok) {
-    setResult(res, "good", "Settings saved.");
-    await loadStatus();
-    await loadSnapshots();
-  } else {
-    setResult(res, "bad", data.error || "Could not save settings.");
-  }
-}
-
-async function testConnection() {
-  const res = $("settingsResult");
-  setResult(res, "info", "Testing connection…");
-  const data = await postJSON("/api/test", {});
-  if (data.ok) {
-    setResult(res, "good", data.message || "Connected.");
-    hide($("initRepo"));
-  } else if (data.code === "no_restic" || data.code === "bad_config") {
-    setResult(res, "bad", data.error || data.message || "Failed.");
-  } else {
-    setResult(res, "bad", data.message || data.error || "Connection failed.", data.detail);
-    // If the repository simply isn't initialized yet, offer to create it.
-    if (data.initialized === false) show($("initRepo"));
-    else hide($("initRepo"));
-  }
-}
-
-async function initRepository() {
-  const res = $("settingsResult");
-  setResult(res, "info", "Initializing repository…");
-  const data = await postJSON("/api/init", {});
-  if (data.ok) {
-    setResult(res, "good", data.message || "Repository initialized.");
-    hide($("initRepo"));
-    await loadStatus();
-    await loadSnapshots();
-  } else {
-    setResult(res, "bad", data.error || "Initialization failed.", data.detail);
-  }
-}
-
-// ---- status & global UI ----------------------------------------------------
+document.addEventListener("DOMContentLoaded", async () => {
+  window.addEventListener("hashchange", router);
+  await loadStatus();
+  openGlobalStream();
+  router();
+});
 
 async function loadStatus() {
-  const s = await getJSON("/api/status");
-  state.resticInstalled = !!s.resticInstalled;
-  state.busy = !!s.busy;
-  state.busyOp = s.busyOp || "";
-  state.configValid = !!s.configValid;
-  state.repository = s.repository || "";
+  const r = await get("/api/status");
+  if (!r.ok) return;
+  const s = r.body;
+  app.resticInstalled = !!s.resticInstalled;
 
-  // restic pill
-  const rp = $("resticPill");
-  if (state.resticInstalled) {
-    rp.className = "pill pill-good";
-    rp.textContent = s.resticVersion ? s.resticVersion.split("\n")[0] : "restic ready";
+  const pill = $("resticPill");
+  if (app.resticInstalled) {
+    pill.className = "pill pill-good";
+    pill.textContent = s.resticVersion ? s.resticVersion.split("\n")[0] : "restic ready";
   } else {
-    rp.className = "pill pill-bad";
-    rp.textContent = "restic not found";
+    pill.className = "pill pill-bad";
+    pill.textContent = "restic not found";
   }
 
-  // repository pill
-  const repoPill = $("repoPill");
-  if (state.repository) {
-    repoPill.className = "pill pill-muted";
-    repoPill.textContent = (s.backendType || "") + ": " + state.repository;
-  } else {
-    repoPill.className = "pill pill-muted";
-    repoPill.textContent = "no repository";
-  }
-
-  // global banner if restic is missing
   const banner = $("globalBanner");
-  if (!state.resticInstalled) {
+  if (!app.resticInstalled) {
     banner.innerHTML =
-      "<strong>restic is not installed.</strong> This app shells out to the <code>restic</code> binary. " +
-      "Install it first — for example <code>brew install restic</code> (macOS), " +
-      "<code>apt install restic</code> (Debian/Ubuntu), or see " +
-      '<a href="https://restic.readthedocs.io/en/stable/020_installation.html" target="_blank" rel="noopener">the install guide</a>. ' +
-      "Then restart this app.";
-    show(banner);
+      "<strong>restic is not installed.</strong> This app runs the <code>restic</code> binary. " +
+      "Install it (e.g. <code>brew install restic</code> or see " +
+      '<a href="https://restic.net" target="_blank" rel="noopener">restic.net</a>) and restart.';
+    banner.classList.remove("hidden");
   } else {
-    hide(banner);
+    banner.classList.add("hidden");
   }
 
-  updateBusyPill();
-  applyGlobalState();
+  app.activeRuns.clear();
+  (s.activeRuns || []).forEach((run) => app.activeRuns.set(run.id, run.status));
+  updateActivePill();
 }
 
-function updateBusyPill() {
-  const pill = $("busyPill");
-  if (state.busy) {
+function updateActivePill() {
+  const pill = $("activePill");
+  const n = app.activeRuns.size;
+  if (n > 0) {
     pill.className = "pill pill-busy";
-    const labels = {
-      backup: "backing up…",
-      restore: "restoring…",
-      download: "preparing download…",
-      init: "initializing…",
-    };
-    pill.textContent = labels[state.busyOp] || "working…";
+    pill.textContent = n + " running";
   } else {
     pill.className = "pill pill-idle";
     pill.textContent = "idle";
   }
 }
 
-function applyGlobalState() {
-  const ok = state.resticInstalled;
-  const busy = state.busy;
-  const ready = ok && !busy;
+// ---- global live stream (lists + badges) -----------------------------------
 
-  $("startBackup").disabled = !ready || !state.configValid;
-  $("startRestore").disabled = !ready || !state.configValid;
-  $("testConn").disabled = !ready;
-  $("initRepo").disabled = !ready;
-  $("refreshSnaps").disabled = !ready;
-  document
-    .querySelectorAll(".download-btn, .restore-row-btn")
-    .forEach((b) => (b.disabled = !ready));
-}
-
-// ---- backup ----------------------------------------------------------------
-
-async function startBackup() {
-  const source = $("sourcePath").value.trim();
-  const data = await postJSON("/api/backup", { source: source });
-  if (!data.ok) {
-    // Show the error in the backup progress card's log area.
-    resetProgress("backup");
-    show(els.backup.card);
-    appendLog("backup", data.error || "Could not start backup.", "error");
-  }
-  // Success path is driven entirely by SSE events.
-}
-
-// ---- restore ---------------------------------------------------------------
-
-async function startRestore() {
-  const snapshotId = $("restoreSnap").value;
-  const target = $("restoreTarget").value.trim();
-  const data = await postJSON("/api/restore", { snapshotId, target });
-  if (!data.ok) {
-    resetProgress("restore");
-    show(els.restore.card);
-    appendLog("restore", data.error || "Could not start restore.", "error");
-  }
-}
-
-// ---- snapshots -------------------------------------------------------------
-
-async function loadSnapshots() {
-  const res = $("snapsResult");
-  const data = await getJSON("/api/snapshots");
-
-  if (!data.ok) {
-    state.snapshots = [];
-    renderSnapsTable([]);
-    populateRestoreSelect([]);
-    if (data.code === "not_initialized") {
-      setResult(res, "info", data.error || "Repository is not initialized yet. Initialize it in Settings.");
-    } else if (data.code === "no_restic") {
-      setResult(res, "bad", data.error || "restic is not installed.");
-    } else {
-      setResult(res, "bad", data.error || "Could not load snapshots.");
-    }
-    return;
-  }
-
-  hide(res);
-  state.snapshots = data.snapshots || [];
-  renderSnapsTable(state.snapshots);
-  populateRestoreSelect(state.snapshots);
-}
-
-function renderSnapsTable(snaps) {
-  const body = $("snapsBody");
-  if (!snaps.length) {
-    body.innerHTML =
-      '<tr><td colspan="6" class="empty">No snapshots yet. Run a backup to create one.</td></tr>';
-    return;
-  }
-  // Newest first.
-  const sorted = snaps.slice().sort((a, b) => new Date(b.time) - new Date(a.time));
-  body.innerHTML = sorted
-    .map((s) => {
-      const id = escapeHtml(s.id);
-      const shortId = escapeHtml(s.shortId || s.id.slice(0, 8));
-      const paths = (s.paths || []).map(escapeHtml).join(", ");
-      const size = s.sizeBytes ? formatBytes(s.sizeBytes) : "—";
-      const files = s.fileCount ? s.fileCount.toLocaleString() : "—";
-      return (
-        "<tr>" +
-        '<td><span class="snap-id">' + shortId + "</span></td>" +
-        "<td>" + escapeHtml(formatTime(s.time)) + "</td>" +
-        '<td class="snap-paths">' + paths + "</td>" +
-        "<td>" + size + "</td>" +
-        "<td>" + files + "</td>" +
-        '<td class="right"><div class="row-actions">' +
-        '<button class="btn btn-small restore-row-btn" data-id="' + id + '">Restore</button>' +
-        '<button class="btn btn-small download-btn" data-id="' + id + '" data-short="' + shortId + '">Download</button>' +
-        "</div></td>" +
-        "</tr>"
-      );
-    })
-    .join("");
-
-  // Wire row buttons.
-  body.querySelectorAll(".restore-row-btn").forEach((b) =>
-    b.addEventListener("click", () => prefillRestore(b.dataset.id))
-  );
-  body.querySelectorAll(".download-btn").forEach((b) =>
-    b.addEventListener("click", () => downloadSnapshot(b.dataset.id, b.dataset.short))
-  );
-  applyGlobalState();
-}
-
-function populateRestoreSelect(snaps) {
-  const sel = $("restoreSnap");
-  const prev = sel.value;
-  if (!snaps.length) {
-    sel.innerHTML = '<option value="">— no snapshots yet —</option>';
-    return;
-  }
-  const sorted = snaps.slice().sort((a, b) => new Date(b.time) - new Date(a.time));
-  sel.innerHTML = sorted
-    .map((s) => {
-      const short = escapeHtml(s.shortId || s.id.slice(0, 8));
-      const when = escapeHtml(formatTime(s.time));
-      return '<option value="' + escapeHtml(s.id) + '">' + short + " · " + when + "</option>";
-    })
-    .join("");
-  if (prev) sel.value = prev;
-}
-
-function prefillRestore(id) {
-  switchTab("restore");
-  $("restoreSnap").value = id;
-  $("restoreTarget").focus();
-}
-
-async function downloadSnapshot(id, shortId) {
-  const res = $("snapsResult");
-  setResult(res, "info", "Preparing download… restoring the snapshot to a temporary folder and zipping it.");
-  try {
-    const resp = await fetch("/api/download?id=" + encodeURIComponent(id));
-    if (!resp.ok) {
-      setResult(res, "bad", "Download failed: " + (await resp.text()));
-      return;
-    }
-    const blob = await resp.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "snapshot-" + (shortId || "backup") + ".zip";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-    setResult(res, "good", "Download ready: snapshot-" + (shortId || "backup") + ".zip (" + formatBytes(blob.size) + ")");
-  } catch (e) {
-    setResult(res, "bad", "Download failed: " + e.message);
-  }
-}
-
-// ---- progress rendering (shared by backup & restore) -----------------------
-
-function cacheProgressEls() {
-  for (const op of ["backup", "restore"]) {
-    const cap = op[0].toUpperCase() + op.slice(1);
-    els[op] = {
-      card: $(op + "Progress"),
-      bar: $(op + "Bar"),
-      percent: $(op + "Percent"),
-      phase: $(op + "Phase"),
-      files: $(op + "Files"),
-      bytes: $(op + "Bytes"),
-      current: $(op + "Current"),
-      summary: $(op + "Summary"),
-      log: $(op + "Log"),
-    };
-  }
-}
-
-function resetProgress(op) {
-  const e = els[op];
-  e.bar.style.width = "0%";
-  e.percent.textContent = "0%";
-  e.phase.textContent = "Starting…";
-  e.files.textContent = "0 / 0 files";
-  e.bytes.textContent = "0 B / 0 B";
-  e.current.textContent = "";
-  e.log.textContent = "";
-  hide(e.summary);
-  e.summary.className = "summary hidden";
-}
-
-function updateProgress(op, ev) {
-  const e = els[op];
-  show(e.card);
-  const pct = Math.max(0, Math.min(100, Math.round((ev.percent || 0) * 100)));
-  e.bar.style.width = pct + "%";
-  e.percent.textContent = pct + "%";
-  e.phase.textContent =
-    op === "restore"
-      ? "Restoring…"
-      : Number(ev.totalBytes) > 0
-      ? "Backing up…"
-      : "Scanning files…";
-  e.files.textContent =
-    (Number(ev.filesDone) || 0).toLocaleString() +
-    " / " +
-    (Number(ev.totalFiles) || 0).toLocaleString() +
-    " files";
-  e.bytes.textContent = formatBytes(ev.bytesDone) + " / " + formatBytes(ev.totalBytes);
-  e.current.textContent = ev.currentFile ? "▸ " + ev.currentFile : "";
-}
-
-function appendLog(op, message, level) {
-  const e = els[op];
-  if (!e) return;
-  const span = document.createElement("span");
-  span.className = "l-" + (level || "info");
-  span.textContent = message + "\n";
-  e.log.appendChild(span);
-  e.log.scrollTop = e.log.scrollHeight;
-}
-
-function renderBackupSummary(sum, ok) {
-  const e = els.backup;
-  const stat = (num, label) =>
-    '<div class="stat"><div class="num">' + num + '</div><div class="label">' + label + "</div></div>";
-
-  let html = "<h4>" + (ok ? "Backup complete ✓" : "Backup finished") + "</h4>";
-  html += '<div class="summary-grid">';
-  html += stat((sum.filesNew || 0).toLocaleString(), "files new");
-  html += stat((sum.filesChanged || 0).toLocaleString(), "files changed");
-  html += stat((sum.filesUnmodified || 0).toLocaleString(), "files unchanged");
-  html += stat(formatBytes(sum.dataAdded), "data added");
-  html += stat(formatBytes(sum.totalBytesProcessed), "total processed");
-  html += stat(formatDuration(sum.totalDuration), "duration");
-  html += "</div>";
-
-  // Make the incremental nature of the second run obvious.
-  if ((sum.filesUnmodified || 0) > 0) {
-    html +=
-      '<div class="incremental-note">♻ Incremental run: ' +
-      (sum.filesUnmodified || 0).toLocaleString() +
-      " file(s) were unchanged and skipped. Only " +
-      formatBytes(sum.dataAdded) +
-      " of new/changed data was actually stored.</div>";
-  } else {
-    html +=
-      '<div class="incremental-note">First backup of this folder: all ' +
-      (sum.filesNew || 0).toLocaleString() +
-      " file(s) were stored. Run it again after changing a file to see an incremental backup.</div>";
-  }
-
-  if (sum.snapshotId) {
-    html += '<div class="snapid-chip">snapshot ' + escapeHtml(String(sum.snapshotId).slice(0, 8)) + "</div>";
-  }
-
-  e.summary.innerHTML = html;
-  e.summary.className = "summary " + (ok ? "ok" : "fail");
-  show(e.summary);
-}
-
-function renderRestoreSummary(sum, ok) {
-  const e = els.restore;
-  const stat = (num, label) =>
-    '<div class="stat"><div class="num">' + num + '</div><div class="label">' + label + "</div></div>";
-
-  let html = "<h4>" + (ok ? "Restore complete ✓" : "Restore finished") + "</h4>";
-  html += '<div class="summary-grid">';
-  html += stat(
-    (sum.filesRestored || 0).toLocaleString() + " / " + (sum.totalFiles || 0).toLocaleString(),
-    "files restored"
-  );
-  html += stat(formatBytes(sum.bytesRestored) + " / " + formatBytes(sum.totalBytes), "data restored");
-  if (sum.totalDuration) html += stat(formatDuration(sum.totalDuration), "duration");
-  html += "</div>";
-
-  e.summary.innerHTML = html;
-  e.summary.className = "summary " + (ok ? "ok" : "fail");
-  show(e.summary);
-}
-
-// ---- SSE event handling ----------------------------------------------------
-
-function connectSSE() {
-  const es = new EventSource("/api/events");
-  es.onmessage = (e) => {
+let globalStream = null;
+function openGlobalStream() {
+  if (globalStream) globalStream.close();
+  globalStream = new EventSource("/api/events");
+  globalStream.onmessage = (e) => {
     let ev;
-    try {
-      ev = JSON.parse(e.data);
-    } catch (_) {
-      return;
-    }
-    handleEvent(ev);
-  };
-  es.onerror = () => {
-    // EventSource reconnects automatically; nothing to do here.
+    try { ev = JSON.parse(e.data); } catch (_) { return; }
+    if (ev.type !== "run" || !ev.run) return;
+    const run = ev.run;
+    if (isActive(run.status)) app.activeRuns.set(run.id, run.status);
+    else app.activeRuns.delete(run.id);
+    updateActivePill();
+    // Refresh the current list view so run state stays fresh.
+    const sec = currentSection();
+    if (sec === "activity") renderActivity();
+    else if (sec === "jobs" && !currentId()) { /* list view: leave as-is */ }
   };
 }
 
-function handleEvent(ev) {
-  switch (ev.type) {
-    case "busy":
-      state.busy = !!ev.busy;
-      state.busyOp = ev.op || "";
-      updateBusyPill();
-      applyGlobalState();
-      break;
+// ---- router ----------------------------------------------------------------
 
-    case "started":
-      if (ev.op === "backup" || ev.op === "restore") {
-        resetProgress(ev.op);
-        show(els[ev.op].card);
-        appendLog(ev.op, ev.message || "Started.", "ok");
-      }
-      break;
+function parseHash() {
+  const raw = location.hash.replace(/^#/, "") || "/jobs";
+  return raw.split("/").filter((x) => x !== "");
+}
+function currentSection() { return parseHash()[0] || "jobs"; }
+function currentId() { return parseHash()[1] || ""; }
 
-    case "status":
-      if (ev.op === "backup" || ev.op === "restore") updateProgress(ev.op, ev);
-      break;
+function setActiveTab(section) {
+  document.querySelectorAll(".tab").forEach((t) =>
+    t.classList.toggle("active", t.dataset.section === section));
+}
 
-    case "log":
-      if (ev.op === "backup" || ev.op === "restore") {
-        appendLog(ev.op, ev.message || "", ev.level || "info");
-      }
-      break;
+function router() {
+  closeRunStream();
+  const parts = parseHash();
+  const section = parts[0] || "jobs";
+  setActiveTab(section);
 
-    case "summary":
-      if (ev.op === "backup") renderBackupSummary(ev.summary || {}, true);
-      else if (ev.op === "restore") renderRestoreSummary(ev.summary || {}, true);
+  switch (section) {
+    case "jobs":
+      if (parts[1]) renderJobDetail(parts[1]);
+      else renderJobs();
       break;
-
-    case "done": {
-      const op = ev.op;
-      if (op === "backup" || op === "restore") {
-        const e = els[op];
-        if (ev.ok) {
-          e.bar.style.width = "100%";
-          e.percent.textContent = "100%";
-          e.phase.textContent = "Complete ✓";
-        } else {
-          e.phase.textContent = "Failed ✗";
-          // Mark any shown summary as failed.
-          if (!e.summary.classList.contains("hidden")) {
-            e.summary.className = "summary fail";
-          }
-        }
-        appendLog(op, ev.message || (ev.ok ? "Done." : "Failed."), ev.ok ? "ok" : "error");
-      }
-      // A finished backup/restore changes the snapshot list.
-      if (op === "backup" || op === "restore") loadSnapshots();
+    case "repositories":
+      if (parts[1]) renderRepoDetail(parts[1]);
+      else renderRepositories();
       break;
-    }
+    case "folders":
+      renderFolders();
+      break;
+    case "activity":
+      renderActivity();
+      break;
+    case "runs":
+      if (parts[1]) renderRun(parts[1]);
+      else location.hash = "#/activity";
+      break;
+    default:
+      location.hash = "#/jobs";
   }
 }
 
-// ---- boot ------------------------------------------------------------------
+function view(html) { $("view").innerHTML = html; }
+function notFoundCard(what) {
+  return `<div class="card"><p class="empty">${esc(what)} not found. <a href="#/jobs">Go back</a></p></div>`;
+}
 
-document.addEventListener("DOMContentLoaded", async () => {
-  cacheProgressEls();
-  setupTabs();
-  setupBackendToggle();
+// ---- JOBS ------------------------------------------------------------------
 
-  $("saveSettings").addEventListener("click", saveSettings);
-  $("testConn").addEventListener("click", testConnection);
-  $("initRepo").addEventListener("click", initRepository);
-  $("startBackup").addEventListener("click", startBackup);
-  $("startRestore").addEventListener("click", startRestore);
-  $("refreshSnaps").addEventListener("click", loadSnapshots);
+async function renderJobs() {
+  const [jobsR, foldersR, reposR] = await Promise.all([
+    get("/api/jobs"), get("/api/folders"), get("/api/repositories"),
+  ]);
+  const jobs = (jobsR.body && jobsR.body.jobs) || [];
+  const folders = (foldersR.body && foldersR.body.folders) || [];
+  const repos = (reposR.body && reposR.body.repositories) || [];
 
-  connectSSE();
-  await loadSettings();
-  await loadStatus();
-  await loadSnapshots();
-});
+  let html = `<div class="card"><div class="card-head"><h2>Backup jobs</h2></div>
+    <p class="hint">A job is a saved pairing of a backup folder and a storage repository. Run it, and its history lives here.</p>`;
+
+  if (!folders.length || !repos.length) {
+    html += `<p class="muted">First create at least one
+      <a href="#/folders">folder</a> and one <a href="#/repositories">repository</a>, then define a job.</p>`;
+  } else {
+    html += `<div class="grid2">
+      <div class="field"><label>Job name</label><input id="jobName" placeholder="e.g. Documents → S3"/></div>
+      <div class="field"><label>Backup folder</label><select id="jobFolder">${
+        folders.map((f) => `<option value="${esc(f.id)}">${esc(f.name)} (${esc(f.path)})</option>`).join("")
+      }</select></div>
+      <div class="field"><label>Repository</label><select id="jobRepo">${
+        repos.map((r) => `<option value="${esc(r.id)}">${esc(r.name)}</option>`).join("")
+      }</select></div>
+    </div>
+    <div class="actions"><button id="createJob" class="btn btn-primary">Create job</button></div>
+    <div id="jobFormResult"></div>`;
+  }
+  html += `</div>`;
+
+  html += `<div class="card"><h3>Your jobs</h3><div class="table-wrap"><table>
+    <thead><tr><th>Name</th><th>Folder</th><th>Repository</th><th class="right">Actions</th></tr></thead>
+    <tbody>`;
+  if (!jobs.length) {
+    html += `<tr><td colspan="4" class="empty">No jobs yet.</td></tr>`;
+  } else {
+    html += jobs.map((j) => `<tr>
+      <td><a href="#/jobs/${esc(j.id)}">${esc(j.name)}</a></td>
+      <td class="path">${esc(j.folderPath || j.folderName || "—")}</td>
+      <td>${esc(j.repoName || "—")}</td>
+      <td class="right"><div class="row-actions">
+        <button class="btn btn-small run-job" data-id="${esc(j.id)}">Run backup</button>
+        <a class="btn btn-small" href="#/jobs/${esc(j.id)}">Open</a>
+      </div></td></tr>`).join("");
+  }
+  html += `</tbody></table></div></div>`;
+  view(html);
+
+  if ($("createJob")) $("createJob").onclick = createJob;
+  document.querySelectorAll(".run-job").forEach((b) => (b.onclick = () => runJob(b.dataset.id)));
+}
+
+async function createJob() {
+  const body = {
+    name: $("jobName").value.trim(),
+    folderId: $("jobFolder").value,
+    repositoryId: $("jobRepo").value,
+  };
+  const r = await post("/api/jobs", body);
+  if (r.ok) renderJobs();
+  else setInlineResult("jobFormResult", "bad", (r.body && r.body.error) || "Could not create job.");
+}
+
+async function runJob(id) {
+  const r = await post(`/api/jobs/${id}/run`);
+  if (r.status === 202 && r.body.runId) { location.hash = "#/runs/" + r.body.runId; return; }
+  alert((r.body && r.body.error) || "Could not start backup.");
+}
+
+async function renderJobDetail(id) {
+  const r = await get(`/api/jobs/${id}`);
+  if (r.status === 404) { view(notFoundCard("Job")); return; }
+  const job = r.body.job;
+
+  view(`
+    <div class="crumbs"><a href="#/jobs">Jobs</a> / ${esc(job.name)}</div>
+    <div class="card"><div class="card-head">
+      <div><h2>${esc(job.name)}</h2>
+        <p class="hint">Folder <span class="path">${esc(job.folderPath || "?")}</span> → repository <strong>${esc(job.repoName || "?")}</strong></p>
+      </div>
+      <div class="row-actions">
+        <button id="runJobBtn" class="btn btn-primary">Run backup</button>
+        <button id="delJobBtn" class="btn btn-small btn-danger">Delete job</button>
+      </div>
+    </div>
+    <p class="muted mono" style="font-size:12px">tag: ${esc(job.tag || "")}</p>
+    <div id="jobRunResult"></div></div>
+
+    <div class="card"><div class="card-head"><h3>Run history</h3>
+      <button id="refreshRuns" class="btn btn-small">Refresh</button></div>
+      <div class="table-wrap"><table>
+      <thead><tr><th>Kind</th><th>Status</th><th>Started</th><th>Duration</th><th>Stored</th></tr></thead>
+      <tbody id="runsBody"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
+      </table></div>
+    </div>
+
+    <div class="card"><div class="card-head"><h3>Snapshots</h3>
+      <button id="refreshSnaps" class="btn btn-small">Refresh</button></div>
+      <div class="field"><label>Restore / download target folder (absolute path)</label>
+        <input id="restoreTarget" placeholder="/home/you/restore-here"/></div>
+      <div id="snapsResult"></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>ID</th><th>Time</th><th>Size</th><th>Files</th><th class="right">Actions</th></tr></thead>
+        <tbody id="snapsBody"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
+      </table></div>
+    </div>`);
+
+  $("runJobBtn").onclick = () => runJob(id);
+  $("delJobBtn").onclick = async () => {
+    if (!confirm(`Delete job "${job.name}"? Its run history is kept.`)) return;
+    const d = await del(`/api/jobs/${id}`);
+    if (d.ok) location.hash = "#/jobs";
+    else alert((d.body && d.body.error) || "Could not delete job.");
+  };
+  $("refreshRuns").onclick = () => loadJobRuns(id);
+  $("refreshSnaps").onclick = () => loadJobSnapshots(job);
+  loadJobRuns(id);
+  loadJobSnapshots(job);
+}
+
+async function loadJobRuns(id) {
+  const r = await get(`/api/jobs/${id}/runs`);
+  const runs = (r.body && r.body.runs) || [];
+  const body = $("runsBody");
+  if (!body) return;
+  if (!runs.length) { body.innerHTML = `<tr><td colspan="5" class="empty">No runs yet.</td></tr>`; return; }
+  body.innerHTML = runs.map((run) => {
+    const stored = run.summary
+      ? (run.summary.snapshotId ? "snapshot " + shortId(run.summary.snapshotId) + " · " : "") +
+        (run.summary.dataAdded ? fmtBytes(run.summary.dataAdded) + " added" : "")
+      : "";
+    return `<tr class="clickable" data-run="${esc(run.id)}">
+      <td>${esc(run.kind)}</td><td>${statusBadge(run.status)}</td>
+      <td>${esc(fmtTime(run.startedAt))}</td><td>${esc(runDuration(run))}</td>
+      <td class="mono-cell">${esc(stored)}</td></tr>`;
+  }).join("");
+  body.querySelectorAll("tr.clickable").forEach((tr) =>
+    (tr.onclick = () => (location.hash = "#/runs/" + tr.dataset.run)));
+}
+
+async function loadJobSnapshots(job) {
+  const r = await get(`/api/jobs/${job.id}/snapshots`);
+  renderSnapshotsInto(r.body, job.repositoryId);
+}
+
+// Shared snapshot table renderer (used by job detail and repo detail).
+function renderSnapshotsInto(payload, repoId) {
+  const body = $("snapsBody");
+  const result = $("snapsResult");
+  if (!body) return;
+  if (result) result.innerHTML = "";
+  if (!payload || !payload.ok) {
+    body.innerHTML = `<tr><td colspan="5" class="empty">—</td></tr>`;
+    if (result) {
+      const code = payload && payload.code;
+      const kind = code === "not_initialized" ? "info" : "bad";
+      setInlineResult("snapsResult", kind, (payload && payload.error) || "Could not list snapshots.");
+    }
+    return;
+  }
+  const snaps = (payload.snapshots || []).slice().sort((a, b) => new Date(b.time) - new Date(a.time));
+  if (!snaps.length) { body.innerHTML = `<tr><td colspan="5" class="empty">No snapshots yet.</td></tr>`; return; }
+  body.innerHTML = snaps.map((s) => `<tr>
+    <td class="mono-cell">${esc(s.shortId || shortId(s.id))}</td>
+    <td>${esc(fmtTime(s.time))}</td>
+    <td>${s.sizeBytes ? esc(fmtBytes(s.sizeBytes)) : "—"}</td>
+    <td>${s.fileCount ? esc(s.fileCount.toLocaleString()) : "—"}</td>
+    <td class="right"><div class="row-actions">
+      <button class="btn btn-small snap-restore" data-id="${esc(s.id)}">Restore</button>
+      <button class="btn btn-small snap-download" data-id="${esc(s.id)}">Download</button>
+    </div></td></tr>`).join("");
+  body.querySelectorAll(".snap-restore").forEach((b) =>
+    (b.onclick = () => restoreSnapshot(repoId, b.dataset.id)));
+  body.querySelectorAll(".snap-download").forEach((b) =>
+    (b.onclick = () => downloadSnapshot(repoId, b.dataset.id)));
+}
+
+async function restoreSnapshot(repoId, snapshotId) {
+  const target = ($("restoreTarget") && $("restoreTarget").value.trim()) || "";
+  if (!target) { alert("Enter a target folder to restore into."); return; }
+  const r = await post(`/api/repositories/${repoId}/restore`, { snapshotId, target });
+  if (r.status === 202 && r.body.runId) location.hash = "#/runs/" + r.body.runId;
+  else alert((r.body && r.body.error) || "Could not start restore.");
+}
+
+async function downloadSnapshot(repoId, snapshotId) {
+  const r = await post(`/api/repositories/${repoId}/download`, { snapshotId });
+  if (r.status === 202 && r.body.runId) location.hash = "#/runs/" + r.body.runId;
+  else alert((r.body && r.body.error) || "Could not start download.");
+}
+
+// ---- REPOSITORIES ----------------------------------------------------------
+
+async function renderRepositories() {
+  const r = await get("/api/repositories");
+  const repos = (r.body && r.body.repositories) || [];
+  view(`
+    <div class="card"><h2>Storage repositories</h2>
+      <p class="hint">Where restic stores encrypted backups. Use a local directory to try it with no credentials.</p>
+      <div id="repoForm"></div>
+    </div>
+    <div class="card"><h3>Your repositories</h3><div class="table-wrap"><table>
+      <thead><tr><th>Name</th><th>Backend</th><th>Location</th><th class="right">Actions</th></tr></thead>
+      <tbody>${
+        repos.length ? repos.map((repo) => `<tr>
+          <td><a href="#/repositories/${esc(repo.id)}">${esc(repo.name)}</a></td>
+          <td>${esc(repo.backendType)}</td>
+          <td class="path">${esc(repo.backendType === "S3" ? (repo.endpoint || "") + "/" + (repo.bucket || "") : (repo.localPath || ""))}</td>
+          <td class="right"><div class="row-actions">
+            <button class="btn btn-small repo-edit" data-id="${esc(repo.id)}">Edit</button>
+            <button class="btn btn-small btn-danger repo-del" data-id="${esc(repo.id)}">Delete</button>
+          </div></td></tr>`).join("")
+        : `<tr><td colspan="4" class="empty">No repositories yet.</td></tr>`
+      }</tbody></table></div></div>`);
+
+  renderRepoForm(null);
+  document.querySelectorAll(".repo-edit").forEach((b) =>
+    (b.onclick = () => renderRepoForm(repos.find((x) => x.id === b.dataset.id))));
+  document.querySelectorAll(".repo-del").forEach((b) => (b.onclick = () => deleteRepo(b.dataset.id)));
+}
+
+function renderRepoForm(repo) {
+  const r = repo || { backendType: "Local" };
+  const isS3 = r.backendType === "S3";
+  $("repoForm").innerHTML = `
+    <div class="field"><label>Name</label><input id="rName" value="${esc(r.name || "")}"/></div>
+    <div class="field"><label>Backend</label>
+      <select id="rBackend"><option value="Local"${isS3 ? "" : " selected"}>Local directory</option>
+      <option value="S3"${isS3 ? " selected" : ""}>S3-compatible</option></select></div>
+    <div id="rLocal" class="${isS3 ? "hidden" : ""}">
+      <div class="field"><label>Repository directory</label><input id="rLocalPath" value="${esc(r.localPath || "")}" placeholder="/home/you/restic-repo"/></div>
+    </div>
+    <div id="rS3" class="${isS3 ? "" : "hidden"}"><div class="grid2">
+      <div class="field"><label>Endpoint</label><input id="rEndpoint" value="${esc(r.endpoint || "")}" placeholder="https://s3.amazonaws.com"/></div>
+      <div class="field"><label>Bucket</label><input id="rBucket" value="${esc(r.bucket || "")}"/></div>
+      <div class="field"><label>Region (optional)</label><input id="rRegion" value="${esc(r.region || "")}"/></div>
+      <div class="field"><label>Access key</label><input id="rAccess" value="${esc(r.accessKey || "")}" autocomplete="off"/></div>
+      <div class="field"><label>Secret key</label><input id="rSecret" type="password" value="${esc(r.secretKey || "")}" autocomplete="off"/></div>
+    </div></div>
+    <div class="field"><label>Repository password</label><input id="rPassword" type="password" value="${esc(r.password || "")}" autocomplete="off" placeholder="encrypts your backups — don't lose it"/></div>
+    <div class="actions">
+      <button id="rSave" class="btn btn-primary">${repo ? "Save changes" : "Add repository"}</button>
+      ${repo ? `<button id="rCancel" class="btn">Cancel</button>` : ""}
+    </div>
+    <div id="repoResult"></div>`;
+
+  $("rBackend").onchange = () => {
+    const s3 = $("rBackend").value === "S3";
+    $("rLocal").classList.toggle("hidden", s3);
+    $("rS3").classList.toggle("hidden", !s3);
+  };
+  $("rSave").onclick = () => saveRepo(repo && repo.id);
+  if ($("rCancel")) $("rCancel").onclick = () => renderRepoForm(null);
+}
+
+function gatherRepo() {
+  return {
+    name: $("rName").value.trim(),
+    backendType: $("rBackend").value,
+    localPath: $("rLocalPath").value.trim(),
+    endpoint: $("rEndpoint").value.trim(),
+    bucket: $("rBucket").value.trim(),
+    region: $("rRegion").value.trim(),
+    accessKey: $("rAccess").value.trim(),
+    secretKey: $("rSecret").value,
+    password: $("rPassword").value,
+  };
+}
+
+async function saveRepo(id) {
+  const body = gatherRepo();
+  const r = id ? await put(`/api/repositories/${id}`, body) : await post("/api/repositories", body);
+  if (r.ok) renderRepositories();
+  else setInlineResult("repoResult", "bad", (r.body && r.body.error) || "Could not save repository.");
+}
+
+async function deleteRepo(id) {
+  if (!confirm("Delete this repository?")) return;
+  const r = await del(`/api/repositories/${id}`);
+  if (r.ok) renderRepositories();
+  else alert((r.body && r.body.error) || "Could not delete repository.");
+}
+
+async function renderRepoDetail(id) {
+  const r = await get(`/api/repositories/${id}`);
+  if (r.status === 404) { view(notFoundCard("Repository")); return; }
+  const repo = r.body.repository;
+  view(`
+    <div class="crumbs"><a href="#/repositories">Repositories</a> / ${esc(repo.name)}</div>
+    <div class="card"><div class="card-head">
+      <div><h2>${esc(repo.name)}</h2><p class="hint">${esc(repo.backendType)} backend</p></div>
+      <div class="row-actions">
+        <button id="rTest" class="btn btn-small">Test connection</button>
+        <button id="rInit" class="btn btn-small">Initialize</button>
+        <button id="rUnlock" class="btn btn-small">Unlock</button>
+      </div></div>
+      <div id="repoOpResult"></div>
+    </div>
+    <div class="card"><div class="card-head"><h3>Snapshots</h3>
+      <button id="refreshSnaps" class="btn btn-small">Refresh</button></div>
+      <div class="field"><label>Restore / download target folder (absolute path)</label>
+        <input id="restoreTarget" placeholder="/home/you/restore-here"/></div>
+      <div id="snapsResult"></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>ID</th><th>Time</th><th>Size</th><th>Files</th><th class="right">Actions</th></tr></thead>
+        <tbody id="snapsBody"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
+      </table></div>
+    </div>`);
+
+  $("rTest").onclick = async () => {
+    setInlineResult("repoOpResult", "info", "Testing…");
+    const t = await post(`/api/repositories/${id}/test`);
+    const b = t.body || {};
+    setInlineResult("repoOpResult", b.ok ? "good" : "bad", b.message || b.error || "Failed.", b.detail);
+  };
+  $("rInit").onclick = async () => {
+    const t = await post(`/api/repositories/${id}/init`);
+    if (t.status === 202 && t.body.runId) location.hash = "#/runs/" + t.body.runId;
+    else setInlineResult("repoOpResult", "bad", (t.body && t.body.error) || "Could not initialize.");
+  };
+  $("rUnlock").onclick = async () => {
+    const t = await post(`/api/repositories/${id}/unlock`);
+    setInlineResult("repoOpResult", t.body && t.body.ok ? "good" : "bad",
+      (t.body && (t.body.message || t.body.error)) || "Failed.");
+  };
+  const loadSnaps = async () => renderSnapshotsInto((await get(`/api/repositories/${id}/snapshots`)).body, id);
+  $("refreshSnaps").onclick = loadSnaps;
+  loadSnaps();
+}
+
+// ---- FOLDERS ---------------------------------------------------------------
+
+async function renderFolders() {
+  const r = await get("/api/folders");
+  const folders = (r.body && r.body.folders) || [];
+  view(`
+    <div class="card"><h2>Backup folders</h2>
+      <p class="hint">Named folders you back up, so a path becomes a reusable thing rather than retyped each time.</p>
+      <div id="folderForm"></div>
+    </div>
+    <div class="card"><h3>Your folders</h3><div class="table-wrap"><table>
+      <thead><tr><th>Name</th><th>Path</th><th class="right">Actions</th></tr></thead>
+      <tbody>${
+        folders.length ? folders.map((f) => `<tr>
+          <td>${esc(f.name)}</td><td class="path">${esc(f.path)}</td>
+          <td class="right"><div class="row-actions">
+            <button class="btn btn-small folder-edit" data-id="${esc(f.id)}">Edit</button>
+            <button class="btn btn-small btn-danger folder-del" data-id="${esc(f.id)}">Delete</button>
+          </div></td></tr>`).join("")
+        : `<tr><td colspan="3" class="empty">No folders yet.</td></tr>`
+      }</tbody></table></div></div>`);
+
+  renderFolderForm(null);
+  document.querySelectorAll(".folder-edit").forEach((b) =>
+    (b.onclick = () => renderFolderForm(folders.find((x) => x.id === b.dataset.id))));
+  document.querySelectorAll(".folder-del").forEach((b) => (b.onclick = () => deleteFolder(b.dataset.id)));
+}
+
+function renderFolderForm(folder) {
+  const f = folder || {};
+  $("folderForm").innerHTML = `
+    <div class="grid2">
+      <div class="field"><label>Name</label><input id="fName" value="${esc(f.name || "")}"/></div>
+      <div class="field"><label>Absolute path</label><input id="fPath" value="${esc(f.path || "")}" placeholder="/home/you/Documents"/></div>
+    </div>
+    <div class="actions">
+      <button id="fSave" class="btn btn-primary">${folder ? "Save changes" : "Add folder"}</button>
+      ${folder ? `<button id="fCancel" class="btn">Cancel</button>` : ""}
+    </div><div id="folderResult"></div>`;
+  $("fSave").onclick = () => saveFolder(folder && folder.id);
+  if ($("fCancel")) $("fCancel").onclick = () => renderFolderForm(null);
+}
+
+async function saveFolder(id) {
+  const body = { name: $("fName").value.trim(), path: $("fPath").value.trim() };
+  const r = id ? await put(`/api/folders/${id}`, body) : await post("/api/folders", body);
+  if (r.ok) renderFolders();
+  else setInlineResult("folderResult", "bad", (r.body && r.body.error) || "Could not save folder.");
+}
+
+async function deleteFolder(id) {
+  if (!confirm("Delete this folder?")) return;
+  const r = await del(`/api/folders/${id}`);
+  if (r.ok) renderFolders();
+  else alert((r.body && r.body.error) || "Could not delete folder.");
+}
+
+// ---- ACTIVITY --------------------------------------------------------------
+
+async function renderActivity() {
+  const r = await get("/api/runs?status=active");
+  const runs = (r.body && r.body.runs) || [];
+  view(`<div class="card"><div class="card-head"><h2>Activity</h2>
+    <button id="refreshActivity" class="btn btn-small">Refresh</button></div>
+    <p class="hint">Everything running right now. Refreshing, opening a second tab or coming back later shows the same live state.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Kind</th><th>Status</th><th>Job / repository</th><th>Started</th></tr></thead>
+      <tbody>${
+        runs.length ? runs.map((run) => `<tr class="clickable" data-run="${esc(run.id)}">
+          <td>${esc(run.kind)}</td><td>${statusBadge(run.status)}</td>
+          <td>${esc(run.jobName || run.repoName || "—")}</td>
+          <td>${esc(fmtTime(run.startedAt))}</td></tr>`).join("")
+        : `<tr><td colspan="4" class="empty">Nothing is running.</td></tr>`
+      }</tbody></table></div></div>`);
+  $("refreshActivity").onclick = renderActivity;
+  document.querySelectorAll("tr.clickable").forEach((tr) =>
+    (tr.onclick = () => (location.hash = "#/runs/" + tr.dataset.run)));
+}
+
+// ---- RUN VIEW (shared, live) -----------------------------------------------
+
+let runStream = null;
+let runLogSeq = 0;
+
+function closeRunStream() {
+  if (runStream) { runStream.close(); runStream = null; }
+}
+
+async function renderRun(id) {
+  const r = await get(`/api/runs/${id}`);
+  if (r.status === 404) { view(notFoundCard("Run")); return; }
+  const run = r.body.run;
+
+  view(`
+    <div class="crumbs">${run.jobId ? `<a href="#/jobs/${esc(run.jobId)}">← ${esc(run.jobName || "job")}</a>`
+      : `<a href="#/activity">← Activity</a>`}</div>
+    <div class="card"><div class="card-head">
+      <div><h2 style="text-transform:capitalize">${esc(run.kind)} <span id="runBadge">${statusBadge(run.status)}</span></h2>
+        <p class="hint" id="runMeta"></p></div>
+      <div class="row-actions">
+        <button id="runStopBtn" class="btn btn-small btn-danger hidden">Stop</button>
+        <span id="runDownloadWrap"></span>
+      </div>
+    </div>
+      <div class="progress-head"><span class="muted" id="runPhase"></span><span class="percent" id="runPercent">0%</span></div>
+      <div class="progressbar"><div class="progressbar-fill" id="runBar"></div></div>
+      <div class="progress-stats"><span id="runFiles">0 / 0 files</span><span id="runBytes">0 B / 0 B</span></div>
+      <div class="current-file" id="runCurrent"></div>
+      <div id="runSummary"></div>
+    </div>
+    <div class="card"><h3>Log</h3><pre class="log" id="runLog"></pre></div>`);
+
+  $("runStopBtn").onclick = async () => {
+    $("runStopBtn").disabled = true;
+    await post(`/api/runs/${id}/stop`);
+  };
+
+  runLogSeq = 0;
+  updateRunView(run);
+  openRunStream(id);
+}
+
+function openRunStream(id) {
+  closeRunStream();
+  runStream = new EventSource(`/api/runs/${id}/events`);
+  runStream.onmessage = (e) => {
+    let ev;
+    try { ev = JSON.parse(e.data); } catch (_) { return; }
+    if (ev.type === "run" && ev.run) updateRunView(ev.run);
+    else if (ev.type === "progress" && ev.progress) updateProgress(ev.progress);
+    else if (ev.type === "log" && ev.line) appendLogLine(ev.line);
+  };
+  // EventSource auto-reconnects and resumes via Last-Event-ID; nothing to do onerror.
+}
+
+function updateRunView(run) {
+  const badge = $("runBadge");
+  if (!badge) return; // navigated away
+  badge.innerHTML = statusBadge(run.status);
+
+  const started = fmtTime(run.startedAt);
+  let meta = `started ${started} · ${runDuration(run)}`;
+  if (run.params && run.params.target) meta += ` · target ${run.params.target}`;
+  if (run.error) meta += ` · ${run.error}`;
+  $("runMeta").textContent = meta;
+
+  updateProgress(run.progress || {});
+  // A finished successful run should read 100% even if restic's last status tick
+  // (before the summary) was below it.
+  if (run.status === "success" || run.status === "success_warnings") {
+    $("runBar").style.width = "100%";
+    $("runPercent").textContent = "100%";
+  }
+  renderSummary(run);
+
+  const stop = $("runStopBtn");
+  stop.classList.toggle("hidden", !isActive(run.status));
+  stop.disabled = false;
+
+  const phase = { starting: "Starting…", running: "Running…", success: "Complete", success_warnings: "Complete (warnings)", failed: "Failed", canceled: "Stopped", interrupted: "Interrupted" }[run.status] || run.status;
+  if ($("runPhase")) $("runPhase").textContent = phase;
+
+  // Download link for a finished download run.
+  const dl = $("runDownloadWrap");
+  if (run.kind === "download" && run.status === "success") {
+    dl.innerHTML = `<a class="btn btn-small btn-primary" href="/api/runs/${esc(run.id)}/download">Download .zip</a>`;
+  } else {
+    dl.innerHTML = "";
+  }
+}
+
+function updateProgress(p) {
+  if (!$("runBar")) return;
+  const pct = Math.max(0, Math.min(100, Math.round((Number(p.percent) || 0) * 100)));
+  $("runBar").style.width = pct + "%";
+  $("runPercent").textContent = pct + "%";
+  $("runFiles").textContent =
+    (Number(p.filesDone) || 0).toLocaleString() + " / " + (Number(p.totalFiles) || 0).toLocaleString() + " files";
+  $("runBytes").textContent = fmtBytes(p.bytesDone) + " / " + fmtBytes(p.totalBytes);
+  $("runCurrent").textContent = p.currentFile ? "▸ " + p.currentFile : "";
+}
+
+function renderSummary(run) {
+  const box = $("runSummary");
+  if (!box) return;
+  const s = run.summary;
+  if (!s) { box.innerHTML = ""; return; }
+  const stat = (num, label) => `<div class="stat"><div class="num">${num}</div><div class="label">${label}</div></div>`;
+  let cells;
+  if (run.kind === "restore" || run.kind === "download") {
+    cells = stat((s.filesRestored || 0).toLocaleString(), "files restored") +
+      stat(fmtBytes(s.bytesRestored), "data restored") +
+      (s.totalDuration ? stat(fmtDur(s.totalDuration), "duration") : "");
+  } else {
+    cells = stat((s.filesNew || 0).toLocaleString(), "new") +
+      stat((s.filesChanged || 0).toLocaleString(), "changed") +
+      stat((s.filesUnmodified || 0).toLocaleString(), "unchanged") +
+      stat(fmtBytes(s.dataAdded), "data added") +
+      (s.snapshotId ? stat(shortId(s.snapshotId), "snapshot") : "") +
+      (s.totalDuration ? stat(fmtDur(s.totalDuration), "duration") : "");
+  }
+  box.innerHTML = `<div class="summary-grid">${cells}</div>`;
+}
+
+function appendLogLine(line) {
+  const log = $("runLog");
+  if (!log) return;
+  if (line.seq && line.seq <= runLogSeq) return; // de-dup
+  if (line.seq) runLogSeq = line.seq;
+  const span = document.createElement("span");
+  span.className = "l-" + (line.level || "info");
+  span.textContent = (line.message || "") + "\n";
+  log.appendChild(span);
+  log.scrollTop = log.scrollHeight;
+}
+
+// ---- inline result helper --------------------------------------------------
+
+function setInlineResult(id, kind, message, detail) {
+  const el = $(id);
+  if (!el) return;
+  el.className = "result " + kind;
+  el.innerHTML = esc(message) + (detail ? `<span class="detail">${esc(detail)}</span>` : "");
+}
