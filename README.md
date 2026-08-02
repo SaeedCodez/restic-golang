@@ -11,6 +11,8 @@ built around three things you create and manage:
 - **Backup jobs** — the core concept: a saved, named pairing of one folder and
   one repository. A job is the thing you run, look at, and come back to.
 
+![Backup jobs, the home screen: each job shows its last outcome, and a job running right now shows live progress inline](docs/screenshots/jobs.png)
+
 Everything long-running — backups, restores, repository setup, and old-snapshot
 restores/downloads — is a **run**: a durable record with its own live progress
 and a permanent log. History survives restarts; a job in progress still shows as
@@ -20,6 +22,44 @@ is still running.
 
 This is a single-user tool meant to run on your own machine, so there is no
 authentication.
+
+---
+
+## The interface
+
+Dark is the default theme — the screenshots here are the light one, which you can
+switch to from the top bar (there is also "follow system").
+
+**Every run keeps its full log, forever.** Open a run from days ago and you get
+the same view as one running now: progress, what it stored, and every line restic
+printed. The log filters down to warnings and errors, copies to the clipboard, and
+follows the tail only while you are already at the bottom — scrolling up to read
+something is not fought by the next incoming line.
+
+![A finished backup: progress, a summary of what it stored, and the full log with a warning highlighted](docs/screenshots/run.png)
+
+**A job owns its history.** Every run it has ever done, plus the snapshots it
+created — matched by a permanent per-job restic tag, so they stay findable in the
+repository even if this app's state is lost. Any snapshot can be restored to a
+folder or downloaded as a zip.
+
+![A job page: its complete run history and the snapshots it created](docs/screenshots/job-detail.png)
+
+**Activity is what is happening and what already happened.** Live progress for
+anything in flight, then filterable history across every job and repository.
+
+![Activity: a live run with progress, above filterable history of every finished operation](docs/screenshots/activity.png)
+
+A few things worth knowing from the screenshots above:
+
+- **Health is on the home screen.** Each job card carries its last outcome, when
+  it ran and how much it stored, so "is anything broken?" is answered without
+  clicking into anything.
+- **Contention is explained, not dead-ended.** Operations are serialized per
+  repository; if one is in the way you get told which run holds it, with a link
+  straight to it.
+- **Colour means status.** The palette is otherwise monochrome, so green, amber
+  and red on the page always refer to a run's outcome and nothing else.
 
 ---
 
@@ -67,6 +107,9 @@ See [Working on the UI](#working-on-the-ui).
    snapshots appear on the job page.
 5. Change a file and run again to see an incremental backup (mostly *unchanged*,
    only a little *data added*).
+
+A brand-new install walks you through steps 1–3 on the jobs screen rather than
+showing an empty list.
 
 For **S3**, add a repository with backend **S3-compatible** and fill in the
 endpoint, bucket, optional region, access key, secret key, and password.
@@ -134,6 +177,20 @@ ui/                UI source (React + Tailwind + shadcn/ui) — see below
 web/               built UI, committed and embedded into the binary
 ```
 
+### A note on the HTTP API
+
+The UI talks to a plain JSON API, which is usable on its own:
+
+| Endpoint | Notes |
+| --- | --- |
+| `GET /api/jobs` | each job carries its `lastRun` and `runCount`, so a list needs one request |
+| `POST /api/jobs/{id}/run` | `202` with the new run id, or `409` `busy` naming the blocking run |
+| `GET /api/runs` | filter with `status` (`active`/`finished`/an exact status), `kind`, `jobId`, `limit`; `total` reports the match count before the limit |
+| `GET /api/runs/{id}/log` | the durable log, `?after=<seq>` for incremental reads |
+| `GET /api/runs/{id}/events` | SSE: run state, progress and log, resumable via `Last-Event-ID` |
+| `GET /api/events` | SSE: run-level state changes across the app |
+| `GET /api/repositories` | secrets are omitted; `hasPassword` / `hasSecretKey` report whether one is set |
+
 ## Working on the UI
 
 The interface is a React single-page app built with [Vite](https://vite.dev),
@@ -166,8 +223,10 @@ ui/src/
 └── lib/                 API client, SSE hooks, formatting, run vocabulary
 ```
 
-Dark is the default theme; light and "follow system" are available from the top
-bar and applied before first paint, so the page never flashes the wrong theme.
+The visual language is deliberately narrow: a neutral grey ramp for every
+surface, no brand hue at all (the primary action colour is the foreground
+itself), and colour reserved entirely for run status. Dark is the default; the
+stored choice is applied before first paint, so the page never flashes.
 
 ## How it maps to restic
 
@@ -192,6 +251,8 @@ bar and applied before first paint, so the page never flashes the wrong theme.
 - Retention keeps the newest 100 runs per job on startup; download workspaces are
   ephemeral and wiped on startup.
 - A browser cannot hand the server a real local path, so source and target
-  folders are entered as absolute-path text fields.
+  folders are entered as absolute-path text fields. A mistyped path surfaces as a
+  failed run rather than as validation.
 - restic must be the sole writer per repository for the stale-lock handling to be
   safe.
+- There is no scheduler: jobs run when you run them.
