@@ -1,0 +1,164 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/* Dark mode is driven by a class on <html>, set before first paint in index.html. */
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --radius: 0.625rem;
+
+  --background: #ffffff;
+  --foreground: #0d1117;
+  --card: #ffffff;
+  --card-foreground: #0d1117;
+  --popover: #ffffff;
+  --popover-foreground: #0d1117;
+  --primary: #2563eb;
+  --primary-foreground: #ffffff;
+  --secondary: #f3f5f8;
+  --secondary-foreground: #0d1117;
+  --muted: #f3f5f8;
+  --muted-foreground: #5b6472;
+  --accent: #eef2f7;
+  --accent-foreground: #0d1117;
+  --destructive: #dc2626;
+  --destructive-foreground: #ffffff;
+  --border: #e3e7ec;
+  --input: #d4dae2;
+  --ring: #2563eb;
+
+  --success: #15803d;
+  --warning: #b45309;
+  --info: #2563eb;
+
+  --surface: #f7f8fa;
+  --log-bg: #f7f8fa;
+}
+
+.dark {
+  --background: #0a0c10;
+  --foreground: #e6e9ef;
+  --card: #12151b;
+  --card-foreground: #e6e9ef;
+  --popover: #161a21;
+  --popover-foreground: #e6e9ef;
+  --primary: #4f8ff7;
+  --primary-foreground: #05090f;
+  --secondary: #1b1f27;
+  --secondary-foreground: #e6e9ef;
+  --muted: #1b1f27;
+  --muted-foreground: #8b94a3;
+  --accent: #1f2530;
+  --accent-foreground: #e6e9ef;
+  --destructive: #f2635f;
+  --destructive-foreground: #140505;
+  --border: #232833;
+  --input: #2a303c;
+  --ring: #4f8ff7;
+
+  --success: #46c07a;
+  --warning: #eab646;
+  --info: #6ba6ff;
+
+  --surface: #0e1116;
+  --log-bg: #07090d;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-info: var(--info);
+  --color-surface: var(--surface);
+  --color-log-bg: var(--log-bg);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+  html {
+    scrollbar-gutter: stable;
+  }
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  /* Numbers that update in place (progress, sizes, durations) must not jitter. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+}
+
+/* Sliding sheen for work that has started but reported no percentage yet. */
+@keyframes progress-sweep {
+  0% {
+    left: -35%;
+  }
+  100% {
+    left: 100%;
+  }
+}
+
+/* Thin, unobtrusive scrollbars for the log and other scroll panes. */
+@layer utilities {
+  .scroll-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--input) transparent;
+  }
+  .scroll-thin::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  .scroll-thin::-webkit-scrollbar-thumb {
+    background-color: var(--input);
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
