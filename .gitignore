@@ -6,3 +6,11 @@
 
 # Default local repository directory
 /restic-repo/
+
+# New app state directory
+/data/
+
+# Front-end toolchain. `ui/` holds the UI source; its build output is committed
+# to `web/` (which main.go embeds), so `go build` never needs Node.
+/ui/node_modules/
+/ui/dist/

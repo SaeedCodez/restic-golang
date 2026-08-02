@@ -23,12 +23,16 @@ var webFiles embed.FS
 
 func main() {
 	addr := flag.String("addr", "127.0.0.1:8080", "address to listen on")
-	configPath := flag.String("config", "config.json", "path to the JSON config file")
+	configPath := flag.String("config", "config.json", "path to the legacy JSON config file (imported once)")
+	dataDir := flag.String("data", "data", "directory for persisted app state (repositories, folders, jobs, runs)")
 	flag.Parse()
 
-	store, err := loadConfigStore(*configPath)
+	app, err := newApp(*dataDir)
 	if err != nil {
-		log.Fatalf("could not load config %q: %v", *configPath, err)
+		log.Fatalf("could not open data directory: %v", err)
+	}
+	if err := app.importLegacyConfig(*configPath); err != nil {
+		log.Printf("note: could not import legacy config: %v", err)
 	}
 
 	// Serve the embedded web/ directory at the site root.
@@ -38,8 +42,12 @@ func main() {
 	}
 	static := http.FileServer(http.FS(uiFS))
 
-	hub := newHub()
-	srv := newServer(store, hub)
+	// Make the durable run records honest before accepting any traffic: any run
+	// still marked running when the previous process died is marked interrupted,
+	// and orphaned restic children are reaped.
+	app.Reconcile()
+
+	srv := newServer(app)
 
 	httpServer := &http.Server{
 		Addr:              *addr,
