@@ -36,7 +36,7 @@ function Brand() {
       to="/jobs"
       className="flex shrink-0 items-center gap-2.5 rounded-md py-1 pr-2 transition-opacity hover:opacity-80"
     >
-      <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-primary text-primary-foreground">
+      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary text-primary-foreground">
         <svg viewBox="0 0 24 24" className="size-4" fill="none" aria-hidden="true">
           <path
             d="M12 4a8 8 0 1 0 8 8"
@@ -47,14 +47,7 @@ function Brand() {
           <path d="M12 8v4l3 2" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
         </svg>
       </span>
-      <span className="hidden min-w-0 sm:block">
-        <span className="block truncate text-[13px] font-semibold leading-tight">
-          restic backup
-        </span>
-        <span className="block truncate text-[11px] leading-tight text-muted-foreground">
-          manager
-        </span>
-      </span>
+      <span className="display hidden truncate text-[13px] font-medium sm:block">restic</span>
     </Link>
   );
 }
@@ -65,21 +58,18 @@ function Brand() {
  */
 function NavTabs({ className, activeCount }) {
   return (
-    <nav
-      className={cn(
-        "flex items-center gap-0.5 rounded-lg border border-border bg-card p-0.5",
-        className,
-      )}
-    >
+    <nav className={cn("flex items-center gap-0.5 rounded-lg bg-muted p-0.5", className)}>
       {NAV.map(({ to, label, icon: Icon }) => (
         <NavLink
           key={to}
           to={to}
           className={({ isActive }) =>
             cn(
-              "flex items-center gap-1.5 whitespace-nowrap rounded-[7px] px-2.5 py-1.5 text-[13px] font-medium transition-colors",
+              "flex items-center gap-1.5 whitespace-nowrap rounded-[6px] px-2.5 py-1.5 text-[13px] transition-colors",
               isActive
-                ? "bg-accent text-accent-foreground"
+                // The active tab sits *above* the track in both themes: white on
+                // grey in light, a lighter grey on near-black in dark.
+                ? "bg-background text-foreground dark:bg-accent"
                 : "text-muted-foreground hover:text-foreground",
             )
           }
@@ -87,7 +77,7 @@ function NavTabs({ className, activeCount }) {
           <Icon className="size-3.5 shrink-0" />
           {label}
           {label === "Activity" && activeCount > 0 ? (
-            <span className="ml-0.5 rounded-full bg-warning/20 px-1.5 text-[10px] font-semibold tabular text-warning">
+            <span className="ml-0.5 rounded-full bg-warning/15 px-1.5 text-[10px] tabular text-warning">
               {activeCount}
             </span>
           ) : null}

@@ -318,13 +318,13 @@ export default function RepositoriesRoute() {
             return (
               <Card key={repo.id} className="transition-colors hover:border-input">
                 <div className="flex flex-wrap items-center gap-3 p-4">
-                  <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground">
+                  <span className="grid size-8 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
                     <Icon className="size-4" />
                   </span>
                   <div className="min-w-0 flex-1">
                     <Link
                       to={`/repositories/${repo.id}`}
-                      className="text-[15px] font-semibold tracking-tight hover:underline"
+                      className="display text-sm font-medium hover:underline"
                     >
                       {repo.name}
                     </Link>
@@ -355,9 +355,10 @@ export default function RepositoriesRoute() {
                           variant="ghost"
                           size="icon-sm"
                           onClick={() => remove(repo)}
+                          className="text-muted-foreground hover:text-destructive"
                           aria-label={`Delete ${repo.name}`}
                         >
-                          <Trash2 className="text-destructive" />
+                          <Trash2 />
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent>Delete</TooltipContent>

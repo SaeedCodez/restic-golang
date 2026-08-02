@@ -17,17 +17,17 @@ const Progress = React.forwardRef(
         aria-valuemax={100}
         aria-valuenow={indeterminate ? undefined : Math.round(pct)}
         className={cn(
-          "relative h-2 w-full overflow-hidden rounded-full bg-secondary",
+          "relative h-1 w-full overflow-hidden rounded-full bg-muted",
           className,
         )}
         {...props}
       >
         {indeterminate ? (
-          <div className="absolute inset-y-0 w-1/3 animate-[progress-sweep_1.4s_ease-in-out_infinite] rounded-full bg-primary/70" />
+          <div className="absolute inset-y-0 w-1/3 animate-[progress-sweep_1.4s_ease-in-out_infinite] rounded-full bg-foreground/50" />
         ) : (
           <div
             className={cn(
-              "h-full rounded-full bg-primary transition-[width] duration-300 ease-out",
+              "h-full rounded-full bg-foreground transition-[width] duration-300 ease-out",
               barClassName,
             )}
             style={{ width: pct + "%" }}

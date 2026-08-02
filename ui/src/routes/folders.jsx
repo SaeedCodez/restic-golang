@@ -181,11 +181,11 @@ export default function FoldersRoute() {
           {folders.map((folder) => (
             <Card key={folder.id} className="transition-colors hover:border-input">
               <div className="flex flex-wrap items-center gap-3 p-4">
-                <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground">
+                <span className="grid size-8 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
                   <FolderOpen className="size-4" />
                 </span>
                 <div className="min-w-0 flex-1">
-                  <p className="text-[15px] font-semibold tracking-tight">{folder.name}</p>
+                  <p className="display text-sm font-medium">{folder.name}</p>
                   <p className="truncate font-mono text-xs text-muted-foreground">
                     {folder.path}
                   </p>
@@ -210,9 +210,10 @@ export default function FoldersRoute() {
                         variant="ghost"
                         size="icon-sm"
                         onClick={() => remove(folder)}
+                        className="text-muted-foreground hover:text-destructive"
                         aria-label={`Delete ${folder.name}`}
                       >
-                        <Trash2 className="text-destructive" />
+                        <Trash2 />
                       </Button>
                     </TooltipTrigger>
                     <TooltipContent>Delete</TooltipContent>

@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 const Card = React.forwardRef(({ className, ...props }, ref) => (
   <div
     ref={ref}
-    className={cn("rounded-xl border border-border bg-card text-card-foreground", className)}
+    className={cn("rounded-lg border border-border bg-card text-card-foreground", className)}
     {...props}
   />
 ));
@@ -14,7 +14,7 @@ const CardHeader = React.forwardRef(({ className, ...props }, ref) => (
   <div
     ref={ref}
     className={cn(
-      "flex flex-wrap items-start justify-between gap-3 px-5 py-4",
+      "flex flex-wrap items-start justify-between gap-3 px-5 pb-3 pt-4",
       className,
     )}
     {...props}
@@ -23,16 +23,12 @@ const CardHeader = React.forwardRef(({ className, ...props }, ref) => (
 CardHeader.displayName = "CardHeader";
 
 const CardTitle = React.forwardRef(({ className, ...props }, ref) => (
-  <h3
-    ref={ref}
-    className={cn("text-[15px] font-semibold leading-tight tracking-tight", className)}
-    {...props}
-  />
+  <h3 ref={ref} className={cn("display text-sm font-medium leading-tight", className)} {...props} />
 ));
 CardTitle.displayName = "CardTitle";
 
 const CardDescription = React.forwardRef(({ className, ...props }, ref) => (
-  <p ref={ref} className={cn("text-[13px] text-muted-foreground", className)} {...props} />
+  <p ref={ref} className={cn("text-[13px] leading-relaxed text-muted-foreground", className)} {...props} />
 ));
 CardDescription.displayName = "CardDescription";
 

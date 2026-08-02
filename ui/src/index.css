@@ -4,64 +4,71 @@
 /* Dark mode is driven by a class on <html>, set before first paint in index.html. */
 @custom-variant dark (&:is(.dark *));
 
+/*
+ * The palette is deliberately monochrome: a neutral grey ramp for every surface,
+ * and the *only* hues in the interface are status — green for succeeded, amber
+ * for running, red for failed. Because nothing else competes, a colour anywhere
+ * on the page means something. The primary action colour is the foreground
+ * itself (near-white on dark, near-black on light) rather than a brand blue.
+ */
 :root {
-  --radius: 0.625rem;
+  --radius: 0.5rem;
 
   --background: #ffffff;
-  --foreground: #0d1117;
+  --foreground: #0b0b0c;
   --card: #ffffff;
-  --card-foreground: #0d1117;
+  --card-foreground: #0b0b0c;
   --popover: #ffffff;
-  --popover-foreground: #0d1117;
-  --primary: #2563eb;
-  --primary-foreground: #ffffff;
-  --secondary: #f3f5f8;
-  --secondary-foreground: #0d1117;
-  --muted: #f3f5f8;
-  --muted-foreground: #5b6472;
-  --accent: #eef2f7;
-  --accent-foreground: #0d1117;
+  --popover-foreground: #0b0b0c;
+  --primary: #121214;
+  --primary-foreground: #fafafa;
+  --secondary: #f4f4f5;
+  --secondary-foreground: #121214;
+  --muted: #f4f4f5;
+  --muted-foreground: #71717a;
+  --accent: #f0f0f1;
+  --accent-foreground: #121214;
   --destructive: #dc2626;
-  --destructive-foreground: #ffffff;
-  --border: #e3e7ec;
-  --input: #d4dae2;
-  --ring: #2563eb;
+  --destructive-foreground: #fafafa;
+  --border: #e7e7ea;
+  --input: #d9d9de;
+  --ring: #a1a1aa;
 
-  --success: #15803d;
+  --success: #16a34a;
   --warning: #b45309;
-  --info: #2563eb;
+  --info: #4f46e5;
 
-  --surface: #f7f8fa;
-  --log-bg: #f7f8fa;
+  --surface: #fafafa;
+  --log-bg: #fafafa;
 }
 
 .dark {
-  --background: #0a0c10;
-  --foreground: #e6e9ef;
-  --card: #12151b;
-  --card-foreground: #e6e9ef;
-  --popover: #161a21;
-  --popover-foreground: #e6e9ef;
-  --primary: #4f8ff7;
-  --primary-foreground: #05090f;
-  --secondary: #1b1f27;
-  --secondary-foreground: #e6e9ef;
-  --muted: #1b1f27;
-  --muted-foreground: #8b94a3;
-  --accent: #1f2530;
-  --accent-foreground: #e6e9ef;
-  --destructive: #f2635f;
-  --destructive-foreground: #140505;
-  --border: #232833;
-  --input: #2a303c;
-  --ring: #4f8ff7;
+  --background: #08080a;
+  --foreground: #ededf0;
+  --card: #0f0f11;
+  --card-foreground: #ededf0;
+  --popover: #151517;
+  --popover-foreground: #ededf0;
+  --primary: #ededf0;
+  --primary-foreground: #09090b;
+  --secondary: #1a1a1e;
+  --secondary-foreground: #ededf0;
+  --muted: #161619;
+  --muted-foreground: #82828c;
+  --accent: #1e1e23;
+  --accent-foreground: #fafafa;
+  --destructive: #fb5c5c;
+  --destructive-foreground: #14090a;
+  --border: #1e1e22;
+  --input: #2a2a30;
+  --ring: #6c6c78;
 
-  --success: #46c07a;
-  --warning: #eab646;
-  --info: #6ba6ff;
+  --success: #3ad089;
+  --warning: #f0b34a;
+  --info: #8b93ff;
 
-  --surface: #0e1116;
-  --log-bg: #07090d;
+  --surface: #121215;
+  --log-bg: #0b0b0d;
 }
 
 @theme inline {
@@ -91,8 +98,8 @@
   --color-surface: var(--surface);
   --color-log-bg: var(--log-bg);
 
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 3px);
+  --radius-md: calc(var(--radius) - 1px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
 
@@ -114,6 +121,7 @@
     color: var(--foreground);
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
+    letter-spacing: -0.006em;
   }
   /* Numbers that update in place (progress, sizes, durations) must not jitter. */
   .tabular {
@@ -135,8 +143,8 @@
   }
 }
 
-/* Thin, unobtrusive scrollbars for the log and other scroll panes. */
 @layer utilities {
+  /* Thin, unobtrusive scrollbars for the log and other scroll panes. */
   .scroll-thin {
     scrollbar-width: thin;
     scrollbar-color: var(--input) transparent;
@@ -150,6 +158,10 @@
     border-radius: 999px;
     border: 3px solid transparent;
     background-clip: content-box;
+  }
+  /* Display-weight headings: tighter tracking, so large text does not sprawl. */
+  .display {
+    letter-spacing: -0.022em;
   }
 }
 

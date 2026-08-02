@@ -78,7 +78,7 @@ function JobCard({ job, onRan }) {
           <div className="flex flex-wrap items-center gap-2">
             <Link
               to={`/jobs/${job.id}`}
-              className="truncate text-[15px] font-semibold tracking-tight hover:underline"
+              className="display truncate text-sm font-medium hover:underline"
             >
               {job.name}
             </Link>

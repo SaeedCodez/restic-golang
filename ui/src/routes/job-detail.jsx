@@ -113,8 +113,14 @@ export default function JobDetail() {
             )}
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button size="icon-sm" variant="ghost" onClick={remove} aria-label="Delete job">
-                  <Trash2 className="text-destructive" />
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  onClick={remove}
+                  className="text-muted-foreground hover:text-destructive"
+                  aria-label="Delete job"
+                >
+                  <Trash2 />
                 </Button>
               </TooltipTrigger>
               <TooltipContent>Delete this job</TooltipContent>

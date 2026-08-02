@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 /** Page frames every screen: consistent width, spacing and heading rhythm. */
 export function Page({ className, children }) {
   return (
-    <div className={cn("mx-auto w-full max-w-5xl px-5 py-6 sm:px-8 sm:py-8", className)}>
+    <div className={cn("mx-auto w-full max-w-5xl px-5 py-8 sm:px-8 sm:py-12", className)}>
       {children}
     </div>
   );
@@ -13,13 +13,13 @@ export function Page({ className, children }) {
 
 export function PageHeader({ title, description, actions, breadcrumb, className }) {
   return (
-    <header className={cn("mb-6", className)}>
+    <header className={cn("mb-8", className)}>
       {breadcrumb}
-      <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
-          <h1 className="truncate text-xl font-semibold tracking-tight">{title}</h1>
+          <h1 className="display truncate text-[26px] font-semibold leading-tight">{title}</h1>
           {description ? (
-            <p className="mt-1 max-w-2xl text-[13px] leading-relaxed text-muted-foreground">
+            <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
               {description}
             </p>
           ) : null}

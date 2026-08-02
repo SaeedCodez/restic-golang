@@ -20,13 +20,15 @@ import { STATUS_PHASE, displayPercent, isActive, kindLabel } from "@/lib/runs";
 
 function Stat({ label, value, mono }) {
   return (
-    <div className="rounded-lg border border-border bg-surface px-3 py-2.5">
-      <div className={mono ? "font-mono text-sm" : "tabular text-lg font-semibold leading-tight"}>
+    <div>
+      <div
+        className={
+          mono ? "font-mono text-[13px]" : "display tabular text-xl font-medium leading-tight"
+        }
+      >
         {value}
       </div>
-      <div className="mt-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">
-        {label}
-      </div>
+      <div className="mt-1 text-xs text-muted-foreground">{label}</div>
     </div>
   );
 }
@@ -50,7 +52,7 @@ function SummaryStats({ run }) {
           s.totalDuration ? { label: "duration", value: fmtDur(s.totalDuration) } : null,
         ];
   return (
-    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+    <div className="grid grid-cols-2 gap-x-6 gap-y-5 sm:grid-cols-3 lg:grid-cols-6">
       {stats.filter(Boolean).map((st) => (
         <Stat key={st.label} {...st} />
       ))}
@@ -88,12 +90,12 @@ function ProgressHero({ run }) {
   const indeterminate = active && pct === 0 && !p.totalBytes;
 
   return (
-    <div className="space-y-2.5">
+    <div className="space-y-3">
       <div className="flex items-baseline justify-between gap-4">
         <span className="text-[13px] text-muted-foreground">
           {STATUS_PHASE[run.status] || run.status}
         </span>
-        <span className="tabular text-2xl font-semibold leading-none">
+        <span className="display tabular text-3xl font-medium leading-none">
           {indeterminate ? "—" : Math.round(pct) + "%"}
         </span>
       </div>
@@ -200,7 +202,7 @@ export default function RunView() {
       <Card className="mb-4">
         <div className="flex flex-wrap items-start justify-between gap-3 px-5 pt-4">
           <div className="min-w-0">
-            <h1 className="flex flex-wrap items-center gap-2.5 text-xl font-semibold tracking-tight">
+            <h1 className="display flex flex-wrap items-center gap-2.5 text-[22px] font-medium">
               <RunKindCell kind={current.kind} />
               <StatusBadge status={current.status} />
             </h1>
