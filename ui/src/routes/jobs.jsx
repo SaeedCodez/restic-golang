@@ -96,7 +96,8 @@ function JobCard({ job, onRan }) {
               {job.folderPath || job.folderName || "?"}
             </span>
             <ArrowRight className="size-3 shrink-0 opacity-60" />
-            <span className="max-w-[40%] shrink-0 truncate">{job.repoName || "?"}</span>
+            {/* The repository name keeps its full width; the long path gives way. */}
+            <span className="shrink-0 truncate">{job.repoName || "?"}</span>
           </div>
 
           {!running && last ? (
