@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { toast } from "sonner";
 import { Cloud, HardDrive, Pencil, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -238,7 +238,12 @@ export function RepositoryDialog({ open, onOpenChange, repository, onSaved }) {
 
 export default function RepositoriesRoute() {
   const confirm = useConfirm();
-  const [dialog, setDialog] = React.useState({ open: false, repository: null });
+  const location = useLocation();
+  // Arriving from the setup guide's "Add a repository" opens the dialog directly.
+  const [dialog, setDialog] = React.useState({
+    open: Boolean(location.state?.create),
+    repository: null,
+  });
 
   const loader = React.useCallback(async () => {
     const res = await Repositories.list();

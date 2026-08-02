@@ -309,8 +309,12 @@ function GettingStarted({ hasFolder, hasRepo, onNewJob }) {
                 {step.cta}
               </Button>
             ) : (
+              // `create` tells the destination screen to open its dialog on
+              // arrival, so the step is one click rather than two.
               <Button size="sm" variant="outline" asChild>
-                <Link to={step.to}>{step.cta}</Link>
+                <Link to={step.to} state={{ create: true }}>
+                  {step.cta}
+                </Link>
               </Button>
             )}
           </li>

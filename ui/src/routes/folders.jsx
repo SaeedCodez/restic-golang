@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useLocation } from "react-router-dom";
 import { toast } from "sonner";
 import { FolderOpen, Pencil, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -106,7 +107,12 @@ function FolderDialog({ open, onOpenChange, folder, onSaved }) {
 
 export default function FoldersRoute() {
   const confirm = useConfirm();
-  const [dialog, setDialog] = React.useState({ open: false, folder: null });
+  const location = useLocation();
+  // Arriving from the setup guide's "Add a folder" opens the dialog straight away.
+  const [dialog, setDialog] = React.useState({
+    open: Boolean(location.state?.create),
+    folder: null,
+  });
 
   const loader = React.useCallback(async () => {
     const res = await Folders.list();

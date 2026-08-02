@@ -251,15 +251,11 @@ export function Shell() {
           </div>
           <div className="ml-auto flex items-center gap-1.5">
             <ActivityIndicator />
-            <span className="hidden lg:inline">
-              <ThemeToggle />
-            </span>
+            {/* On desktop the restic pill lives in the sidebar footer instead. */}
             <span className="lg:hidden">
               <ResticStatus compact />
             </span>
-            <span className="lg:hidden">
-              <ThemeToggle />
-            </span>
+            <ThemeToggle />
           </div>
         </header>
 
