@@ -44,7 +44,27 @@ func (s *Server) handleJobRuns(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, http.StatusNotFound, "not_found", "job not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "runs": s.app.runs.runsForJob(r.PathValue("id"))})
+	runs := s.app.runs.runsForJob(r.PathValue("id"))
+	total := len(runs)
+	runs = limitRuns(runs, queryLimit(r))
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "runs": runs, "total": total})
+}
+
+// queryLimit reads a positive ?limit=, or 0 for "no limit".
+func queryLimit(r *http.Request) int {
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 0
+}
+
+func limitRuns(runs []*Run, limit int) []*Run {
+	if limit > 0 && len(runs) > limit {
+		return runs[:limit]
+	}
+	return runs
 }
 
 func (s *Server) handleRunGet(w http.ResponseWriter, r *http.Request) {
@@ -89,12 +109,43 @@ func (s *Server) handleRunStop(w http.ResponseWriter, r *http.Request) {
 	writeStoreError(w, err)
 }
 
+// handleRunList returns run history, newest first, with optional filters:
+//
+//	?status=active|finished|<exact status>   ?kind=backup|restore|init|download
+//	?jobId=<id>                              ?limit=<n>
+//
+// `total` is the match count before the limit, so the UI can say "showing 20 of
+// 137" rather than silently truncating.
 func (s *Server) handleRunList(w http.ResponseWriter, r *http.Request) {
-	var runs []*Run
-	if r.URL.Query().Get("status") == "active" {
-		runs = s.app.runs.activeRuns()
-	} else {
-		runs = s.app.runs.list(nil)
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "runs": runs})
+	q := r.URL.Query()
+	status, kind, jobID := q.Get("status"), q.Get("kind"), q.Get("jobId")
+
+	runs := s.app.runs.list(func(run *Run) bool {
+		switch status {
+		case "", "all":
+		case "active":
+			if !run.Status.Active() {
+				return false
+			}
+		case "finished":
+			if !run.Status.Terminal() {
+				return false
+			}
+		default:
+			if string(run.Status) != status {
+				return false
+			}
+		}
+		if kind != "" && string(run.Kind) != kind {
+			return false
+		}
+		if jobID != "" && run.JobID != jobID {
+			return false
+		}
+		return true
+	})
+
+	total := len(runs)
+	runs = limitRuns(runs, queryLimit(r))
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "runs": runs, "total": total})
 }

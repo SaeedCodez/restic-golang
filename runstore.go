@@ -114,13 +114,60 @@ func (s *RunStore) list(keep func(*Run) bool) []*Run {
 	}
 	s.mu.RUnlock()
 
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].StartedAt.Equal(out[j].StartedAt) {
-			return out[i].ID > out[j].ID
-		}
-		return out[i].StartedAt.After(out[j].StartedAt)
-	})
+	sort.Slice(out, func(i, j int) bool { return newerRun(out[i], out[j]) })
 	return out
+}
+
+// newerRun is the single ordering rule for run history: most recently started
+// first, with the id breaking ties (run ids are time-sortable).
+func newerRun(a, b *Run) bool {
+	if a.StartedAt.Equal(b.StartedAt) {
+		return a.ID > b.ID
+	}
+	return a.StartedAt.After(b.StartedAt)
+}
+
+// runStats is a job's history at a glance: its most recent run and how many runs
+// it has in total.
+type runStats struct {
+	Last  *Run
+	Count int
+}
+
+// statsByJob summarizes every job's history in one pass, so listing jobs with
+// their last run stays O(runs) instead of O(jobs × runs).
+func (s *RunStore) statsByJob() map[string]runStats {
+	s.mu.RLock()
+	out := make(map[string]runStats)
+	for _, run := range s.index {
+		if run.JobID == "" {
+			continue
+		}
+		st := out[run.JobID]
+		st.Count++
+		if st.Last == nil || newerRun(run, st.Last) {
+			st.Last = run
+		}
+		out[run.JobID] = st
+	}
+	s.mu.RUnlock()
+
+	// Clone on the way out so a caller can never mutate stored state.
+	for jobID, st := range out {
+		if st.Last != nil {
+			st.Last = st.Last.clone()
+			out[jobID] = st
+		}
+	}
+	return out
+}
+
+// statsForJob is statsByJob narrowed to one job.
+func (s *RunStore) statsForJob(jobID string) runStats {
+	if jobID == "" {
+		return runStats{}
+	}
+	return s.statsByJob()[jobID]
 }
 
 // runsForJob returns a job's run history, newest first.

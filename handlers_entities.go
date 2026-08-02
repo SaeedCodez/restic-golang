@@ -42,8 +42,41 @@ func writeStoreError(w http.ResponseWriter, err error) {
 
 // ---- repositories ----------------------------------------------------------
 
+// repoView is a repository as the browser is allowed to see it. The encryption
+// password and the S3 secret key never leave the server: the shadowing fields
+// below are always empty and `omitempty` drops them from the JSON entirely, so
+// the browser learns only *whether* a secret is set. An update that omits a
+// secret keeps the stored one (see handleRepoUpdate), which is what makes an
+// edit form work without ever round-tripping the secret through the page.
+type repoView struct {
+	Repository
+	Password     string `json:"password,omitempty"`
+	SecretKey    string `json:"secretKey,omitempty"`
+	HasPassword  bool   `json:"hasPassword"`
+	HasSecretKey bool   `json:"hasSecretKey"`
+}
+
+func repoViewOf(repo Repository) repoView {
+	v := repoView{
+		Repository:   repo,
+		HasPassword:  strings.TrimSpace(repo.Password) != "",
+		HasSecretKey: strings.TrimSpace(repo.SecretKey) != "",
+	}
+	v.Repository.Password = ""
+	v.Repository.SecretKey = ""
+	return v
+}
+
+func repoViewsOf(repos []Repository) []repoView {
+	out := make([]repoView, 0, len(repos))
+	for _, repo := range repos {
+		out = append(out, repoViewOf(repo))
+	}
+	return out
+}
+
 func (s *Server) handleRepoList(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "repositories": s.app.repos.List()})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "repositories": repoViewsOf(s.app.repos.List())})
 }
 
 func (s *Server) handleRepoCreate(w http.ResponseWriter, r *http.Request) {
@@ -60,7 +93,7 @@ func (s *Server) handleRepoCreate(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "repository": created})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "repository": repoViewOf(created)})
 }
 
 func (s *Server) handleRepoGet(w http.ResponseWriter, r *http.Request) {
@@ -69,13 +102,25 @@ func (s *Server) handleRepoGet(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, http.StatusNotFound, "not_found", "repository not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "repository": repo})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "repository": repoViewOf(repo)})
 }
 
 func (s *Server) handleRepoUpdate(w http.ResponseWriter, r *http.Request) {
 	var repo Repository
 	if !decodeJSON(w, r, &repo) {
 		return
+	}
+	// Secrets are never sent to the browser, so an edit form cannot send them
+	// back. An omitted secret therefore means "keep what is stored" — merge
+	// before validating, so a repository does not fail validation for a password
+	// it already has.
+	if existing, ok := s.app.repos.Get(r.PathValue("id")); ok {
+		if strings.TrimSpace(repo.Password) == "" {
+			repo.Password = existing.Password
+		}
+		if strings.TrimSpace(repo.SecretKey) == "" {
+			repo.SecretKey = existing.SecretKey
+		}
 	}
 	if err := repo.Validate(); err != nil {
 		errorJSON(w, http.StatusBadRequest, "bad_request", err.Error())
@@ -86,7 +131,7 @@ func (s *Server) handleRepoUpdate(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "repository": updated})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "repository": repoViewOf(updated)})
 }
 
 func (s *Server) handleRepoDelete(w http.ResponseWriter, r *http.Request) {
@@ -168,18 +213,23 @@ func (s *Server) handleFolderDelete(w http.ResponseWriter, r *http.Request) {
 
 // ---- jobs ------------------------------------------------------------------
 
-// jobView is a job enriched with its folder/repository display fields and its
-// derived restic tag, so the UI can render a job without extra lookups.
+// jobView is a job enriched with its folder/repository display fields, its
+// derived restic tag and its latest run, so the jobs screen can answer "is this
+// healthy, and when did it last work?" without a request per job.
 type jobView struct {
 	Job
 	FolderName string `json:"folderName"`
 	FolderPath string `json:"folderPath"`
 	RepoName   string `json:"repoName"`
 	Tag        string `json:"tag"`
+	LastRun    *Run   `json:"lastRun,omitempty"`
+	RunCount   int    `json:"runCount"`
 }
 
-func (s *Server) viewOf(job Job) jobView {
-	v := jobView{Job: job, Tag: job.ResticTag()}
+// viewWith builds a job view from already-computed run stats, so a list can
+// summarize every job's history in a single pass over the runs.
+func (s *Server) viewWith(job Job, st runStats) jobView {
+	v := jobView{Job: job, Tag: job.ResticTag(), LastRun: st.Last, RunCount: st.Count}
 	if f, ok := s.app.folders.Get(job.FolderID); ok {
 		v.FolderName = f.Name
 		v.FolderPath = f.Path
@@ -190,11 +240,16 @@ func (s *Server) viewOf(job Job) jobView {
 	return v
 }
 
+func (s *Server) viewOf(job Job) jobView {
+	return s.viewWith(job, s.app.runs.statsForJob(job.ID))
+}
+
 func (s *Server) handleJobList(w http.ResponseWriter, r *http.Request) {
 	jobs := s.app.jobs.List()
+	stats := s.app.runs.statsByJob()
 	views := make([]jobView, 0, len(jobs))
 	for _, j := range jobs {
-		views = append(views, s.viewOf(j))
+		views = append(views, s.viewWith(j, stats[j.ID]))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "jobs": views})
 }
