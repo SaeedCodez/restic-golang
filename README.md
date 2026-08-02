@@ -53,14 +53,18 @@ Build a standalone binary (the web UI is embedded):
 go build -o restic-web . && ./restic-web
 ```
 
+Node is **not** needed to build or run the app — only to change the interface.
+See [Working on the UI](#working-on-the-ui).
+
 ## Quick start (Local backend — no credentials)
 
-1. **Repositories** → add a repository, backend **Local directory**, pick a folder
-   (e.g. `./restic-repo`), set a password, save. Open it and **Initialize**.
-2. **Folders** → add a folder with the absolute path you want to back up.
+1. **Folders** → add a folder with the absolute path you want to back up.
+2. **Repositories** → add a repository, backend **Local directory**, pick a
+   directory (e.g. `./restic-repo`) and set a password.
 3. **Jobs** → create a job pairing that folder and that repository.
-4. Open the job and **Run backup**. Watch the live run; its history and snapshots
-   appear on the job page.
+4. **Run backup**. The repository is created and initialized on the first backup,
+   so there is no separate setup step. Watch the live run; its history and
+   snapshots appear on the job page.
 5. Change a file and run again to see an incremental backup (mostly *unchanged*,
    only a little *data added*).
 
@@ -74,7 +78,8 @@ Credentials are always passed to restic through the process **environment**
 ## Architecture
 
 Dependency-free Go (standard library only); state is plain files under the data
-directory.
+directory. The front-end has its own toolchain, but it is a build-time concern —
+the shipped binary is still a single self-contained executable.
 
 ```
 data/
@@ -125,15 +130,51 @@ server.go          routing + shared HTTP helpers
 handlers_*.go      HTTP handlers: entities, runs, repo ops, SSE, status
 sysproc_*.go       process-group setup / signalling (unix, windows)
 reap_*.go          orphan identification (linux via /proc; no-op elsewhere)
-web/               single-page UI (HTML + CSS + vanilla JS), embedded
+ui/                UI source (React + Tailwind + shadcn/ui) — see below
+web/               built UI, committed and embedded into the binary
 ```
+
+## Working on the UI
+
+The interface is a React single-page app built with [Vite](https://vite.dev),
+[Tailwind CSS v4](https://tailwindcss.com) and
+[shadcn/ui](https://ui.shadcn.com) components (Radix primitives, lucide icons).
+Those components are *copied into* `ui/src/components/ui/` rather than installed
+as a dependency, so they can be edited like any other file in the repo.
+
+The source lives in `ui/`; its build output is committed to `web/`, which
+`main.go` embeds. That keeps `go build` a single step for anyone who only wants
+to run the app.
+
+```sh
+cd ui
+npm install
+npm run build     # writes ../web — commit the result alongside your source change
+npm run dev       # hot-reloading dev server, proxying /api to localhost:8080
+```
+
+For `npm run dev`, run the Go server separately (`go run .`) so the proxy has an
+API to talk to.
+
+```
+ui/src/
+├── main.jsx             routes (hash-based, so old #/jobs/… links still work)
+├── index.css            theme tokens for dark + light
+├── routes/              one file per screen
+├── components/          app components (shell, run history, log panel, …)
+├── components/ui/       shadcn/ui primitives
+└── lib/                 API client, SSE hooks, formatting, run vocabulary
+```
+
+Dark is the default theme; light and "follow system" are available from the top
+bar and applied before first paint, so the page never flashes the wrong theme.
 
 ## How it maps to restic
 
 | Action          | Command run                                              |
 | --------------- | ------------------------------------------------------- |
 | Test connection | `restic -r <repo> cat config`                           |
-| Initialize      | `restic -r <repo> init`                                 |
+| Initialize      | `restic -r <repo> init` (also run automatically by a backup against an uninitialized repository) |
 | Backup          | `restic -r <repo> backup <src> --tag resticweb-job:<id> --json` |
 | List snapshots  | `restic -r <repo> snapshots [--tag …] --json`           |
 | Restore         | `restic -r <repo> restore <id> --target <dir> --json`   |
@@ -145,7 +186,9 @@ web/               single-page UI (HTML + CSS + vanilla JS), embedded
 - Secrets (repository passwords, S3 secret keys) are stored **in plaintext** in
   the data directory (files are `0600`). Fine for a local single-user tool; not
   for shared or production use. They are read through a single choke point, so
-  encrypting at rest later is a localized change.
+  encrypting at rest later is a localized change. They are never sent to the
+  browser: the API reports only whether a secret is set, and an edit that leaves
+  a secret field blank keeps the stored value.
 - Retention keeps the newest 100 runs per job on startup; download workspaces are
   ephemeral and wiped on startup.
 - A browser cannot hand the server a real local path, so source and target
