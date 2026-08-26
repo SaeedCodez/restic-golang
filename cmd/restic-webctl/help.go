@@ -4,7 +4,7 @@ func shortUsage() string {
 	return `Usage: restic-webctl [global flags] <command> [args]
 
 Commands:
-  auth       setup, login, logout, passwd, status
+  auth       setup, passwd, status
   status     app health summary (dashboard)
   activity   live runs + recent history
   folder     manage backup folders
@@ -13,12 +13,10 @@ Commands:
   run        inspect, follow, stop, and download runs
 
 Global flags:
-  --url URL              server URL (env RESTIC_WEB_URL, default http://127.0.0.1:8080)
-  --password PASS        login password (env RESTIC_WEB_PASSWORD)
-  --session-file PATH    session cookie file
+  --database URL         Postgres URL (env DATABASE_URL)
+  --data DIR             data directory (env RESTIC_WEB_DATA; default /app/data or data)
   --json                 machine-readable JSON on stdout
   --quiet, -q            less human chatter
-  --timeout DURATION     HTTP timeout (default 30s)
   --help, -h             show help
 
 See docs/cli.md for the full guide. Use "restic-webctl <command> --help" for details.
@@ -28,7 +26,7 @@ See docs/cli.md for the full guide. Use "restic-webctl <command> --help" for det
 func fullUsage() string {
 	return shortUsage() + `
 Examples:
-  restic-webctl auth login --password '…'
+  restic-webctl auth setup --password '…'
   restic-webctl --json status
   restic-webctl folder create --name home --path /data/home
   restic-webctl repo create --name local --backend Local --path /data/repo --password '…'
@@ -46,8 +44,6 @@ func helpAuth() string {
 	return `Usage:
   restic-webctl auth status
   restic-webctl auth setup [--password PASS]
-  restic-webctl auth login [--password PASS]
-  restic-webctl auth logout
   restic-webctl auth passwd --current CUR --new NEW
 `
 }

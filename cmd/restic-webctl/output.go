@@ -2,10 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"text/tabwriter"
+
+	"restic-web/internal/core"
 )
 
 func (c *CLI) writeJSON(v any) int {
@@ -17,10 +20,6 @@ func (c *CLI) writeJSON(v any) int {
 		return exitError
 	}
 	return exitOK
-}
-
-func (c *CLI) writeJSONRaw(m map[string]any) int {
-	return c.writeJSON(m)
 }
 
 func cliFail(cfg *config, err error) int {
@@ -36,13 +35,30 @@ func cliFail(cfg *config, err error) int {
 			if ae.Message == "" {
 				payload["error"] = ae.Error()
 			}
-			if ae.Body != nil {
-				for _, k := range []string{"blockingRun", "repoName"} {
-					if v, ok := ae.Body[k]; ok {
-						payload[k] = v
-					}
-				}
+			for k, v := range ae.Extra {
+				payload[k] = v
 			}
+		}
+		var busy *core.BusyError
+		if errors.As(err, &busy) {
+			payload["code"] = "busy"
+			payload["repoName"] = busy.RepoName
+			payload["blockingRun"] = busy.Blocking
+		}
+		var conflict *core.ConflictError
+		if errors.As(err, &conflict) {
+			payload["code"] = "conflict"
+		}
+		var nf *core.NotFoundError
+		if errors.As(err, &nf) {
+			payload["code"] = "not_found"
+		}
+		var ve *core.ValidationError
+		if errors.As(err, &ve) {
+			payload["code"] = "bad_request"
+		}
+		if errors.Is(err, core.ErrRunNotActive) {
+			payload["code"] = "not_active"
 		}
 		_ = json.NewEncoder(os.Stdout).Encode(payload)
 		return code

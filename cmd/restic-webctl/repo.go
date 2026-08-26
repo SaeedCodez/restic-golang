@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
-	"net/http"
 	"os"
 	"strings"
+	"time"
+
+	"restic-web/internal/core"
 )
 
 func (c *CLI) cmdRepo(args []string) int {
@@ -44,8 +47,7 @@ func (c *CLI) cmdRepo(args []string) int {
 		if err := requireArgs(args[1:], 1, helpRepo()); err != nil {
 			return c.fail(err)
 		}
-		rest, wait, follow := parseWaitFollow(args[2:])
-		_ = rest
+		_, wait, follow := parseWaitFollow(args[2:])
 		return c.repoInit(args[1], wait, follow)
 	case "unlock":
 		if err := requireArgs(args[1:], 1, helpRepo()); err != nil {
@@ -73,30 +75,26 @@ func (c *CLI) cmdRepo(args []string) int {
 }
 
 func (c *CLI) repoList() int {
-	items, err := c.listRepos()
-	if err != nil {
-		return c.fail(err)
+	items := c.app.Repos.List()
+	views := make([]repoView, 0, len(items))
+	for _, it := range items {
+		views = append(views, repoViewOf(it))
 	}
 	if c.cfg.json {
-		rows := make([]any, 0, len(items))
-		for _, it := range items {
-			rows = append(rows, it.Raw)
-		}
-		return c.writeJSON(map[string]any{"ok": true, "repositories": rows})
+		return c.writeJSON(map[string]any{"ok": true, "repositories": views})
 	}
-	rows := make([][]string, 0, len(items))
-	for _, it := range items {
-		backend := strField(it.Raw, "backendType")
-		loc := strField(it.Raw, "localPath")
-		if backend == "S3" {
-			loc = strField(it.Raw, "endpoint") + "/" + strField(it.Raw, "bucket")
+	rows := make([][]string, 0, len(views))
+	for _, it := range views {
+		loc := it.LocalPath
+		if it.BackendType == "S3" {
+			loc = it.Endpoint + "/" + it.Bucket
 		}
 		rows = append(rows, []string{
 			it.ID,
 			it.Name,
-			backend,
+			it.BackendType,
 			loc,
-			yn(boolField(it.Raw, "hasPassword")),
+			yn(it.HasPassword),
 		})
 	}
 	c.printTable([]string{"ID", "NAME", "BACKEND", "LOCATION", "PASSWORD"}, rows)
@@ -104,34 +102,27 @@ func (c *CLI) repoList() int {
 }
 
 func (c *CLI) repoGet(query string) int {
-	ref, err := c.resolveRepo(query)
+	repo, err := c.resolveRepo(query)
 	if err != nil {
 		return c.fail(err)
 	}
-	status, m, err := c.doJSON(http.MethodGet, "/api/repositories/"+ref.ID, nil)
-	if err != nil {
-		return c.fail(err)
-	}
-	if err := c.requireOK(status, m); err != nil {
-		return c.fail(err)
-	}
+	v := repoViewOf(repo)
 	if c.cfg.json {
-		return c.writeJSONRaw(m)
+		return c.writeJSON(map[string]any{"ok": true, "repository": v})
 	}
-	r := asMap(m["repository"])
-	fmt.Printf("id:\t%s\n", strField(r, "id"))
-	fmt.Printf("name:\t%s\n", strField(r, "name"))
-	fmt.Printf("backendType:\t%s\n", strField(r, "backendType"))
-	if strField(r, "backendType") == "Local" {
-		fmt.Printf("localPath:\t%s\n", strField(r, "localPath"))
+	fmt.Printf("id:\t%s\n", v.ID)
+	fmt.Printf("name:\t%s\n", v.Name)
+	fmt.Printf("backendType:\t%s\n", v.BackendType)
+	if v.BackendType == "Local" {
+		fmt.Printf("localPath:\t%s\n", v.LocalPath)
 	} else {
-		fmt.Printf("endpoint:\t%s\n", strField(r, "endpoint"))
-		fmt.Printf("bucket:\t%s\n", strField(r, "bucket"))
-		fmt.Printf("region:\t%s\n", dash(strField(r, "region")))
-		fmt.Printf("accessKey:\t%s\n", dash(strField(r, "accessKey")))
-		fmt.Printf("hasSecretKey:\t%v\n", boolField(r, "hasSecretKey"))
+		fmt.Printf("endpoint:\t%s\n", v.Endpoint)
+		fmt.Printf("bucket:\t%s\n", v.Bucket)
+		fmt.Printf("region:\t%s\n", dash(v.Region))
+		fmt.Printf("accessKey:\t%s\n", dash(v.AccessKey))
+		fmt.Printf("hasSecretKey:\t%v\n", v.HasSecretKey)
 	}
-	fmt.Printf("hasPassword:\t%v\n", boolField(r, "hasPassword"))
+	fmt.Printf("hasPassword:\t%v\n", v.HasPassword)
 	return exitOK
 }
 
@@ -159,47 +150,47 @@ func (c *CLI) repoCreate(args []string) int {
 	if *name == "" || b == "" || *pass == "" {
 		return c.fail(usagef("--name, --backend, and --password are required\n\n%s", helpRepo()))
 	}
-	body := map[string]any{
-		"name":        *name,
-		"backendType": b,
-		"password":    *pass,
+	repo := core.Repository{
+		Meta:        core.Meta{Name: *name},
+		BackendType: b,
+		Password:    *pass,
 	}
 	switch b {
 	case "Local":
 		if *path == "" {
 			return c.fail(usagef("--path is required for Local backend"))
 		}
-		body["localPath"] = *path
+		repo.LocalPath = *path
 	case "S3":
 		if *endpoint == "" || *bucket == "" || *accessKey == "" || *secretKey == "" {
 			return c.fail(usagef("S3 requires --endpoint --bucket --access-key --secret-key"))
 		}
-		body["endpoint"] = *endpoint
-		body["bucket"] = *bucket
-		body["region"] = *region
-		body["accessKey"] = *accessKey
-		body["secretKey"] = *secretKey
+		repo.Endpoint = *endpoint
+		repo.Bucket = *bucket
+		repo.Region = *region
+		repo.AccessKey = *accessKey
+		repo.SecretKey = *secretKey
 	default:
 		return c.fail(usagef(`--backend must be "Local" or "S3"`))
 	}
-	status, m, err := c.doJSON(http.MethodPost, "/api/repositories", body)
+	if err := repo.Validate(); err != nil {
+		return c.fail(&core.ValidationError{Msg: err.Error()})
+	}
+	created, err := c.app.Repos.Create(repo)
 	if err != nil {
 		return c.fail(err)
 	}
-	if err := c.requireOK(status, m); err != nil {
-		return c.fail(err)
-	}
+	v := repoViewOf(created)
 	if c.cfg.json {
-		return c.writeJSONRaw(m)
+		return c.writeJSON(map[string]any{"ok": true, "repository": v})
 	}
-	r := asMap(m["repository"])
-	c.note("Created repository %s (%s)", strField(r, "name"), strField(r, "id"))
-	fmt.Println(strField(r, "id"))
+	c.note("Created repository %s (%s)", created.Name, created.ID)
+	fmt.Println(created.ID)
 	return exitOK
 }
 
 func (c *CLI) repoUpdate(query string, args []string) int {
-	ref, err := c.resolveRepo(query)
+	existing, err := c.resolveRepo(query)
 	if err != nil {
 		return c.fail(err)
 	}
@@ -217,17 +208,9 @@ func (c *CLI) repoUpdate(query string, args []string) int {
 		return c.fail(err)
 	}
 
-	body := map[string]any{
-		"name":        ref.Name,
-		"backendType": strField(ref.Raw, "backendType"),
-		"localPath":   strField(ref.Raw, "localPath"),
-		"endpoint":    strField(ref.Raw, "endpoint"),
-		"bucket":      strField(ref.Raw, "bucket"),
-		"region":      strField(ref.Raw, "region"),
-		"accessKey":   strField(ref.Raw, "accessKey"),
-	}
+	upd := existing
 	if *name != "" {
-		body["name"] = *name
+		upd.Name = *name
 	}
 	if *backend != "" {
 		b := *backend
@@ -237,162 +220,153 @@ func (c *CLI) repoUpdate(query string, args []string) int {
 		if b == "s3" {
 			b = "S3"
 		}
-		body["backendType"] = b
+		upd.BackendType = b
 	}
 	if *path != "" {
-		body["localPath"] = *path
+		upd.LocalPath = *path
 	}
 	if *endpoint != "" {
-		body["endpoint"] = *endpoint
+		upd.Endpoint = *endpoint
 	}
 	if *bucket != "" {
-		body["bucket"] = *bucket
+		upd.Bucket = *bucket
 	}
 	if *region != "" {
-		body["region"] = *region
+		upd.Region = *region
 	}
 	if *accessKey != "" {
-		body["accessKey"] = *accessKey
+		upd.AccessKey = *accessKey
 	}
 	if *pass != "" {
-		body["password"] = *pass
+		upd.Password = *pass
 	}
 	if *secretKey != "" {
-		body["secretKey"] = *secretKey
+		upd.SecretKey = *secretKey
 	}
-
-	status, m, err := c.doJSON(http.MethodPut, "/api/repositories/"+ref.ID, body)
+	if err := upd.Validate(); err != nil {
+		return c.fail(&core.ValidationError{Msg: err.Error()})
+	}
+	updated, err := c.app.Repos.Update(existing.ID, upd)
 	if err != nil {
 		return c.fail(err)
 	}
-	if err := c.requireOK(status, m); err != nil {
-		return c.fail(err)
-	}
 	if c.cfg.json {
-		return c.writeJSONRaw(m)
+		return c.writeJSON(map[string]any{"ok": true, "repository": repoViewOf(updated)})
 	}
-	return c.okMessage("Repository updated.", map[string]any{"id": ref.ID})
+	return c.okMessage("Repository updated.", map[string]any{"id": existing.ID})
 }
 
 func (c *CLI) repoDelete(query string) int {
-	ref, err := c.resolveRepo(query)
+	repo, err := c.resolveRepo(query)
 	if err != nil {
 		return c.fail(err)
 	}
-	status, m, err := c.doJSON(http.MethodDelete, "/api/repositories/"+ref.ID, nil)
-	if err != nil {
+	if using := c.app.JobsUsingRepository(repo.ID); len(using) > 0 {
+		return c.fail(&core.ConflictError{
+			Msg: "This repository is used by " + jobNames(using) + ". Delete or edit those jobs first.",
+		})
+	}
+	if err := c.app.Repos.Delete(repo.ID); err != nil {
 		return c.fail(err)
 	}
-	if err := c.requireOK(status, m); err != nil {
-		return c.fail(err)
-	}
-	return c.okMessage(fmt.Sprintf("Deleted repository %s.", ref.Name), map[string]any{"id": ref.ID})
+	return c.okMessage(fmt.Sprintf("Deleted repository %s.", repo.Name), map[string]any{"id": repo.ID})
 }
 
 func (c *CLI) repoTest(query string) int {
-	ref, err := c.resolveRepo(query)
+	repo, err := c.resolveRepo(query)
 	if err != nil {
 		return c.fail(err)
 	}
-	status, m, err := c.doJSON(http.MethodPost, "/api/repositories/"+ref.ID+"/test", map[string]any{})
-	if err != nil {
-		return c.fail(err)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	res := c.app.Runner.Test(ctx, &repo)
+	m := map[string]any{
+		"ok":          res.OK,
+		"initialized": res.Initialized,
+		"message":     res.Message,
 	}
-	// test endpoint uses ok for restic reachability, not HTTP success alone
-	if status >= 400 {
-		return c.fail(&apiError{Status: status, Code: codeOf(m), Message: messageOf(m), Body: m})
+	if res.Detail != "" {
+		m["detail"] = res.Detail
 	}
 	if c.cfg.json {
-		return c.writeJSONRaw(m)
+		return c.writeJSON(m)
 	}
-	fmt.Printf("ok:\t%v\n", boolField(m, "ok"))
-	fmt.Printf("initialized:\t%v\n", boolField(m, "initialized"))
-	fmt.Printf("message:\t%s\n", dash(strField(m, "message")))
-	if d := strField(m, "detail"); d != "" {
-		fmt.Printf("detail:\t%s\n", d)
+	fmt.Printf("ok:\t%v\n", res.OK)
+	fmt.Printf("initialized:\t%v\n", res.Initialized)
+	fmt.Printf("message:\t%s\n", dash(res.Message))
+	if res.Detail != "" {
+		fmt.Printf("detail:\t%s\n", res.Detail)
 	}
-	if !boolField(m, "ok") {
+	if !res.OK {
 		return exitError
 	}
 	return exitOK
 }
 
 func (c *CLI) repoInit(query string, wait, follow bool) int {
-	ref, err := c.resolveRepo(query)
+	repo, err := c.resolveRepo(query)
 	if err != nil {
 		return c.fail(err)
 	}
-	status, m, err := c.doJSON(http.MethodPost, "/api/repositories/"+ref.ID+"/init", map[string]any{})
-	if err != nil {
-		return c.fail(err)
-	}
-	return c.startAndMaybeWait(status, m, wait, follow)
+	run, err := c.app.Coord.StartInit(repo.ID)
+	return c.startAndMaybeWait(run, err, wait, follow)
 }
 
 func (c *CLI) repoUnlock(query string) int {
-	ref, err := c.resolveRepo(query)
+	repo, err := c.resolveRepo(query)
 	if err != nil {
 		return c.fail(err)
 	}
-	status, m, err := c.doJSON(http.MethodPost, "/api/repositories/"+ref.ID+"/unlock", map[string]any{})
-	if err != nil {
-		return c.fail(err)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	if err := c.app.Runner.Unlock(ctx, &repo); err != nil {
+		return c.fail(&apiError{Code: "unlock_failed", Message: err.Error()})
 	}
-	if status >= 400 || codeOf(m) == "unlock_failed" {
-		return c.fail(&apiError{Status: status, Code: codeOf(m), Message: messageOf(m), Body: m})
-	}
-	if c.cfg.json {
-		return c.writeJSONRaw(m)
-	}
-	return c.okMessage(strField(m, "message"), nil)
+	return c.okMessage("Removed any stale locks.", nil)
 }
 
 func (c *CLI) repoSnapshots(query string) int {
-	ref, err := c.resolveRepo(query)
+	repo, err := c.resolveRepo(query)
 	if err != nil {
 		return c.fail(err)
 	}
-	return c.printSnapshots("/api/repositories/" + ref.ID + "/snapshots")
+	return c.printSnapshots(&repo, "")
 }
 
-func (c *CLI) printSnapshots(path string) int {
-	status, m, err := c.doJSON(http.MethodGet, path, nil)
+func (c *CLI) printSnapshots(repo *core.Repository, tag string) int {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	snaps, err := c.app.Runner.Snapshots(ctx, repo, tag)
 	if err != nil {
-		return c.fail(err)
-	}
-	if codeOf(m) != "" && !truthy(m["ok"]) {
-		return c.fail(&apiError{Status: status, Code: codeOf(m), Message: messageOf(m), Body: m})
-	}
-	if err := c.requireOK(status, m); err != nil {
-		return c.fail(err)
+		if err.Error() == "repository is not initialized" {
+			return c.fail(&apiError{Code: "not_initialized", Message: "No repository found here yet. Initialize it first."})
+		}
+		return c.fail(&apiError{Code: "restic_error", Message: err.Error()})
 	}
 	if c.cfg.json {
-		return c.writeJSONRaw(m)
+		return c.writeJSON(map[string]any{"ok": true, "snapshots": snaps})
 	}
 	rows := [][]string{}
-	for _, item := range asSlice(m["snapshots"]) {
-		s := asMap(item)
-		tags := ""
-		if t := asSlice(s["tags"]); len(t) > 0 {
-			parts := make([]string, 0, len(t))
-			for _, x := range t {
-				parts = append(parts, fmt.Sprint(x))
-			}
-			tags = strings.Join(parts, ",")
+	for _, s := range snaps {
+		tags := strings.Join(s.Tags, ",")
+		id := s.ShortID
+		if id == "" {
+			id = s.ID
 		}
-		rows = append(rows, []string{
-			dash(strField(s, "shortId", "id")),
-			timeField(s, "time"),
-			dash(strField(s, "hostname")),
-			dash(tags),
-		})
+		t := s.Time
+		if parsed, err := time.Parse(time.RFC3339Nano, s.Time); err == nil {
+			t = formatTime(parsed)
+		} else if parsed, err := time.Parse(time.RFC3339, s.Time); err == nil {
+			t = formatTime(parsed)
+		}
+		rows = append(rows, []string{dash(id), dash(t), dash(s.Hostname), dash(tags)})
 	}
 	c.printTable([]string{"SNAPSHOT", "TIME", "HOST", "TAGS"}, rows)
 	return exitOK
 }
 
 func (c *CLI) repoRestore(query string, args []string) int {
-	ref, err := c.resolveRepo(query)
+	repo, err := c.resolveRepo(query)
 	if err != nil {
 		return c.fail(err)
 	}
@@ -406,18 +380,12 @@ func (c *CLI) repoRestore(query string, args []string) int {
 	if *snap == "" || *target == "" {
 		return c.fail(usagef("--snapshot and --target are required"))
 	}
-	status, m, err := c.doJSON(http.MethodPost, "/api/repositories/"+ref.ID+"/restore", map[string]string{
-		"snapshotId": *snap,
-		"target":     *target,
-	})
-	if err != nil {
-		return c.fail(err)
-	}
-	return c.startAndMaybeWait(status, m, wait, follow)
+	run, err := c.app.Coord.StartRestore(repo.ID, *snap, *target)
+	return c.startAndMaybeWait(run, err, wait, follow)
 }
 
 func (c *CLI) repoDownload(query string, args []string) int {
-	ref, err := c.resolveRepo(query)
+	repo, err := c.resolveRepo(query)
 	if err != nil {
 		return c.fail(err)
 	}
@@ -430,11 +398,6 @@ func (c *CLI) repoDownload(query string, args []string) int {
 	if *snap == "" {
 		return c.fail(usagef("--snapshot is required"))
 	}
-	status, m, err := c.doJSON(http.MethodPost, "/api/repositories/"+ref.ID+"/download", map[string]string{
-		"snapshotId": *snap,
-	})
-	if err != nil {
-		return c.fail(err)
-	}
-	return c.startAndMaybeWait(status, m, wait, follow)
+	run, err := c.app.Coord.StartDownload(repo.ID, *snap)
+	return c.startAndMaybeWait(run, err, wait, follow)
 }

@@ -2,9 +2,10 @@ package main
 
 import (
 	"fmt"
-	"net/http"
 	"os"
 	"strconv"
+
+	"restic-web/internal/core"
 )
 
 func (c *CLI) cmdJob(args []string) int {
@@ -39,15 +40,13 @@ func (c *CLI) cmdJob(args []string) int {
 		if err := requireArgs(args[1:], 1, helpJob()); err != nil {
 			return c.fail(err)
 		}
-		rest, wait, follow := parseWaitFollow(args[2:])
-		_ = rest
+		_, wait, follow := parseWaitFollow(args[2:])
 		return c.jobRun(args[1], wait, follow)
 	case "retention", "forget":
 		if err := requireArgs(args[1:], 1, helpJob()); err != nil {
 			return c.fail(err)
 		}
-		rest, wait, follow := parseWaitFollow(args[2:])
-		_ = rest
+		_, wait, follow := parseWaitFollow(args[2:])
 		return c.jobRetention(args[1], wait, follow)
 	case "runs", "history":
 		if err := requireArgs(args[1:], 1, helpJob()); err != nil {
@@ -65,31 +64,28 @@ func (c *CLI) cmdJob(args []string) int {
 }
 
 func (c *CLI) jobList() int {
-	items, err := c.listJobs()
-	if err != nil {
-		return c.fail(err)
+	jobs := c.app.Jobs.List()
+	views := make([]jobView, 0, len(jobs))
+	for _, j := range jobs {
+		views = append(views, c.viewOf(j))
 	}
 	if c.cfg.json {
-		rows := make([]any, 0, len(items))
-		for _, it := range items {
-			rows = append(rows, it.Raw)
-		}
-		return c.writeJSON(map[string]any{"ok": true, "jobs": rows})
+		return c.writeJSON(map[string]any{"ok": true, "jobs": views})
 	}
-	rows := make([][]string, 0, len(items))
-	for _, it := range items {
+	rows := make([][]string, 0, len(views))
+	for _, it := range views {
 		last := "-"
-		if lr := asMap(it.Raw["lastRun"]); lr != nil {
-			last = strField(lr, "status")
+		if it.LastRun != nil {
+			last = string(it.LastRun.Status)
 		}
 		rows = append(rows, []string{
 			it.ID,
 			it.Name,
-			dash(strField(it.Raw, "folderName")),
-			dash(strField(it.Raw, "repoName")),
-			dash(strField(it.Raw, "scheduleState")),
+			dash(it.FolderName),
+			dash(it.RepoName),
+			dash(it.ScheduleState),
 			last,
-			strconv.Itoa(intField(it.Raw, "runCount")),
+			strconv.Itoa(it.RunCount),
 		})
 	}
 	c.printTable([]string{"ID", "NAME", "FOLDER", "REPO", "SCHEDULE", "LAST", "RUNS"}, rows)
@@ -97,65 +93,55 @@ func (c *CLI) jobList() int {
 }
 
 func (c *CLI) jobGet(query string) int {
-	ref, err := c.resolveJob(query)
+	job, err := c.resolveJob(query)
 	if err != nil {
 		return c.fail(err)
 	}
-	status, m, err := c.doJSON(http.MethodGet, "/api/jobs/"+ref.ID, nil)
-	if err != nil {
-		return c.fail(err)
-	}
-	if err := c.requireOK(status, m); err != nil {
-		return c.fail(err)
-	}
+	v := c.viewOf(job)
 	if c.cfg.json {
-		return c.writeJSONRaw(m)
+		return c.writeJSON(map[string]any{"ok": true, "job": v})
 	}
-	j := asMap(m["job"])
-	fmt.Printf("id:\t%s\n", strField(j, "id"))
-	fmt.Printf("name:\t%s\n", strField(j, "name"))
-	fmt.Printf("folder:\t%s (%s)\n", dash(strField(j, "folderName")), strField(j, "folderId"))
-	fmt.Printf("path:\t%s\n", dash(strField(j, "folderPath")))
-	fmt.Printf("repo:\t%s (%s)\n", dash(strField(j, "repoName")), strField(j, "repositoryId"))
-	fmt.Printf("tag:\t%s\n", dash(strField(j, "tag")))
-	fmt.Printf("scheduleState:\t%s\n", dash(strField(j, "scheduleState")))
-	if nd := timeField(j, "nextDueAt"); nd != "" {
-		fmt.Printf("nextDueAt:\t%s\n", nd)
+	fmt.Printf("id:\t%s\n", v.ID)
+	fmt.Printf("name:\t%s\n", v.Name)
+	fmt.Printf("folder:\t%s (%s)\n", dash(v.FolderName), v.FolderID)
+	fmt.Printf("path:\t%s\n", dash(v.FolderPath))
+	fmt.Printf("repo:\t%s (%s)\n", dash(v.RepoName), v.RepositoryID)
+	fmt.Printf("tag:\t%s\n", dash(v.Tag))
+	fmt.Printf("scheduleState:\t%s\n", dash(v.ScheduleState))
+	fmt.Printf("runCount:\t%d\n", v.RunCount)
+	if v.Schedule != nil {
+		fmt.Printf("schedule:\tenabled=%v kind=%s\n", v.Schedule.Enabled, v.Schedule.Kind)
 	}
-	fmt.Printf("runCount:\t%d\n", intField(j, "runCount"))
-	if sched := asMap(j["schedule"]); sched != nil {
-		fmt.Printf("schedule:\tenabled=%v kind=%s\n", boolField(sched, "enabled"), strField(sched, "kind"))
+	if v.Retention != nil {
+		fmt.Printf("retention:\tenabled=%v preset=%s\n", v.Retention.Enabled, dash(v.Retention.Preset))
 	}
-	if ret := asMap(j["retention"]); ret != nil {
-		fmt.Printf("retention:\tenabled=%v preset=%s\n", boolField(ret, "enabled"), dash(strField(ret, "preset")))
-	}
-	if lr := asMap(j["lastRun"]); lr != nil {
-		fmt.Printf("lastRun:\t%s %s\n", shortID(strField(lr, "id")), strField(lr, "status"))
+	if v.LastRun != nil {
+		fmt.Printf("lastRun:\t%s %s\n", shortID(v.LastRun.ID), v.LastRun.Status)
 	}
 	return exitOK
 }
 
 type jobFlags struct {
-	name               string
-	folder             string
-	repo               string
-	scheduleEnabled    bool
-	scheduleDisabled   bool
-	scheduleKind       string
-	every              string
-	at                 string
-	weekdays           string
-	retentionEnabled   bool
-	retentionDisabled  bool
-	retentionPreset    string
-	keepLast           int
-	keepHourly         int
-	keepDaily          int
-	keepWeekly         int
-	keepMonthly        int
-	keepWithinDays     int
-	setSchedule        bool
-	setRetention       bool
+	name              string
+	folder            string
+	repo              string
+	scheduleEnabled   bool
+	scheduleDisabled  bool
+	scheduleKind      string
+	every             string
+	at                string
+	weekdays          string
+	retentionEnabled  bool
+	retentionDisabled bool
+	retentionPreset   string
+	keepLast          int
+	keepHourly        int
+	keepDaily         int
+	keepWeekly        int
+	keepMonthly       int
+	keepWithinDays    int
+	setSchedule       bool
+	setRetention      bool
 }
 
 func parseJobFlags(name string, args []string) (*jobFlags, []string, error) {
@@ -189,74 +175,80 @@ func parseJobFlags(name string, args []string) (*jobFlags, []string, error) {
 	return f, fs.Args(), nil
 }
 
-func (c *CLI) buildSchedule(f *jobFlags, existing map[string]any) (map[string]any, error) {
+func (c *CLI) buildSchedule(f *jobFlags, existing *core.JobSchedule) (*core.JobSchedule, error) {
 	if f.scheduleDisabled {
-		return map[string]any{"enabled": false, "kind": "daily"}, nil
+		return nil, nil
 	}
-	out := map[string]any{}
+	out := &core.JobSchedule{Enabled: true, Kind: "daily"}
 	if existing != nil {
-		for k, v := range existing {
-			out[k] = v
-		}
+		cp := *existing
+		out = &cp
 	}
 	if f.scheduleEnabled || existing == nil {
-		out["enabled"] = true
+		out.Enabled = true
 	}
-	if f.scheduleEnabled {
-		out["enabled"] = true
+	if f.scheduleKind != "" {
+		out.Kind = f.scheduleKind
 	}
-	kind := f.scheduleKind
-	if kind == "" {
-		kind = strField(out, "kind")
+	if out.Kind == "" {
+		out.Kind = "daily"
 	}
-	if kind == "" {
-		kind = "daily"
-	}
-	out["kind"] = kind
 	if f.every != "" {
-		out["every"] = f.every
+		out.Every = f.every
 	}
 	if f.at != "" {
-		out["at"] = f.at
+		out.At = f.at
 	}
 	if f.weekdays != "" {
 		days, err := parseCSVInts(f.weekdays)
 		if err != nil {
 			return nil, err
 		}
-		out["weekdays"] = days
+		out.Weekdays = days
 	}
 	return out, nil
 }
 
-func (c *CLI) buildRetention(f *jobFlags, existing map[string]any) map[string]any {
+func (c *CLI) buildRetention(f *jobFlags, existing *core.JobRetention) *core.JobRetention {
 	if f.retentionDisabled {
-		return map[string]any{"enabled": false}
+		return nil
 	}
-	out := map[string]any{}
+	out := &core.JobRetention{Enabled: true, Preset: "balanced"}
 	if existing != nil {
-		for k, v := range existing {
-			out[k] = v
-		}
+		cp := *existing
+		out = &cp
+		out.Enabled = true
 	}
-	out["enabled"] = true
 	if f.retentionPreset != "" {
-		out["preset"] = f.retentionPreset
-	} else if strField(out, "preset") == "" {
-		out["preset"] = "balanced"
+		out.Preset = f.retentionPreset
+	} else if out.Preset == "" {
+		out.Preset = "balanced"
 	}
-	setKeep := func(key string, n int) {
+	setKeep := func(dst *int, n int) {
 		if n >= 0 {
-			out[key] = n
+			*dst = n
 		}
 	}
-	setKeep("keepLast", f.keepLast)
-	setKeep("keepHourly", f.keepHourly)
-	setKeep("keepDaily", f.keepDaily)
-	setKeep("keepWeekly", f.keepWeekly)
-	setKeep("keepMonthly", f.keepMonthly)
-	setKeep("keepWithinDays", f.keepWithinDays)
+	setKeep(&out.KeepLast, f.keepLast)
+	setKeep(&out.KeepHourly, f.keepHourly)
+	setKeep(&out.KeepDaily, f.keepDaily)
+	setKeep(&out.KeepWeekly, f.keepWeekly)
+	setKeep(&out.KeepMonthly, f.keepMonthly)
+	setKeep(&out.KeepWithinDays, f.keepWithinDays)
 	return out
+}
+
+func (c *CLI) validateJobRefs(job *core.Job) error {
+	if err := job.Validate(); err != nil {
+		return &core.ValidationError{Msg: err.Error()}
+	}
+	if !c.app.Folders.Exists(job.FolderID) {
+		return &core.ValidationError{Msg: "the chosen backup folder does not exist"}
+	}
+	if !c.app.Repos.Exists(job.RepositoryID) {
+		return &core.ValidationError{Msg: "the chosen storage repository does not exist"}
+	}
+	return nil
 }
 
 func (c *CLI) jobCreate(args []string) int {
@@ -275,39 +267,39 @@ func (c *CLI) jobCreate(args []string) int {
 	if err != nil {
 		return c.fail(err)
 	}
-	body := map[string]any{
-		"name":         f.name,
-		"folderId":     folder.ID,
-		"repositoryId": repo.ID,
+	job := core.Job{
+		Meta:         core.Meta{Name: f.name},
+		FolderID:     folder.ID,
+		RepositoryID: repo.ID,
 	}
 	if f.setSchedule {
 		sched, err := c.buildSchedule(f, nil)
 		if err != nil {
 			return c.fail(err)
 		}
-		body["schedule"] = sched
+		job.Schedule = sched
 	}
 	if f.setRetention {
-		body["retention"] = c.buildRetention(f, nil)
+		job.Retention = c.buildRetention(f, nil)
 	}
-	status, m, err := c.doJSON(http.MethodPost, "/api/jobs", body)
+	if err := c.validateJobRefs(&job); err != nil {
+		return c.fail(err)
+	}
+	created, err := c.app.Jobs.Create(job)
 	if err != nil {
 		return c.fail(err)
 	}
-	if err := c.requireOK(status, m); err != nil {
-		return c.fail(err)
-	}
+	v := c.viewOf(created)
 	if c.cfg.json {
-		return c.writeJSONRaw(m)
+		return c.writeJSON(map[string]any{"ok": true, "job": v})
 	}
-	j := asMap(m["job"])
-	c.note("Created job %s (%s)", strField(j, "name"), strField(j, "id"))
-	fmt.Println(strField(j, "id"))
+	c.note("Created job %s (%s)", created.Name, created.ID)
+	fmt.Println(created.ID)
 	return exitOK
 }
 
 func (c *CLI) jobUpdate(query string, args []string) int {
-	ref, err := c.resolveJob(query)
+	existing, err := c.resolveJob(query)
 	if err != nil {
 		return c.fail(err)
 	}
@@ -315,106 +307,78 @@ func (c *CLI) jobUpdate(query string, args []string) int {
 	if err != nil {
 		return c.fail(err)
 	}
-	body := map[string]any{
-		"name":         ref.Name,
-		"folderId":     strField(ref.Raw, "folderId"),
-		"repositoryId": strField(ref.Raw, "repositoryId"),
-	}
-	if sched := asMap(ref.Raw["schedule"]); sched != nil {
-		body["schedule"] = sched
-	}
-	if ret := asMap(ref.Raw["retention"]); ret != nil {
-		body["retention"] = ret
-	}
+	upd := existing
 	if f.name != "" {
-		body["name"] = f.name
+		upd.Name = f.name
 	}
 	if f.folder != "" {
 		folder, err := c.resolveFolder(f.folder)
 		if err != nil {
 			return c.fail(err)
 		}
-		body["folderId"] = folder.ID
+		upd.FolderID = folder.ID
 	}
 	if f.repo != "" {
 		repo, err := c.resolveRepo(f.repo)
 		if err != nil {
 			return c.fail(err)
 		}
-		body["repositoryId"] = repo.ID
+		upd.RepositoryID = repo.ID
 	}
 	if f.setSchedule {
-		sched, err := c.buildSchedule(f, asMap(body["schedule"]))
+		sched, err := c.buildSchedule(f, existing.Schedule)
 		if err != nil {
 			return c.fail(err)
 		}
-		if f.scheduleDisabled {
-			body["schedule"] = nil
-		} else {
-			body["schedule"] = sched
-		}
+		upd.Schedule = sched
 	}
 	if f.setRetention {
-		if f.retentionDisabled {
-			body["retention"] = nil
-		} else {
-			body["retention"] = c.buildRetention(f, asMap(body["retention"]))
-		}
+		upd.Retention = c.buildRetention(f, existing.Retention)
 	}
-	status, m, err := c.doJSON(http.MethodPut, "/api/jobs/"+ref.ID, body)
-	if err != nil {
+	if err := c.validateJobRefs(&upd); err != nil {
 		return c.fail(err)
 	}
-	if err := c.requireOK(status, m); err != nil {
+	updated, err := c.app.Jobs.Update(existing.ID, upd)
+	if err != nil {
 		return c.fail(err)
 	}
 	if c.cfg.json {
-		return c.writeJSONRaw(m)
+		return c.writeJSON(map[string]any{"ok": true, "job": c.viewOf(updated)})
 	}
-	return c.okMessage("Job updated.", map[string]any{"id": ref.ID})
+	return c.okMessage("Job updated.", map[string]any{"id": existing.ID})
 }
 
 func (c *CLI) jobDelete(query string) int {
-	ref, err := c.resolveJob(query)
+	job, err := c.resolveJob(query)
 	if err != nil {
 		return c.fail(err)
 	}
-	status, m, err := c.doJSON(http.MethodDelete, "/api/jobs/"+ref.ID, nil)
-	if err != nil {
+	if err := c.app.Jobs.Delete(job.ID); err != nil {
 		return c.fail(err)
 	}
-	if err := c.requireOK(status, m); err != nil {
-		return c.fail(err)
-	}
-	return c.okMessage(fmt.Sprintf("Deleted job %s.", ref.Name), map[string]any{"id": ref.ID})
+	return c.okMessage(fmt.Sprintf("Deleted job %s.", job.Name), map[string]any{"id": job.ID})
 }
 
 func (c *CLI) jobRun(query string, wait, follow bool) int {
-	ref, err := c.resolveJob(query)
+	job, err := c.resolveJob(query)
 	if err != nil {
 		return c.fail(err)
 	}
-	status, m, err := c.doJSON(http.MethodPost, "/api/jobs/"+ref.ID+"/run", map[string]any{})
-	if err != nil {
-		return c.fail(err)
-	}
-	return c.startAndMaybeWait(status, m, wait, follow)
+	run, err := c.app.Coord.StartBackup(job.ID)
+	return c.startAndMaybeWait(run, err, wait, follow)
 }
 
 func (c *CLI) jobRetention(query string, wait, follow bool) int {
-	ref, err := c.resolveJob(query)
+	job, err := c.resolveJob(query)
 	if err != nil {
 		return c.fail(err)
 	}
-	status, m, err := c.doJSON(http.MethodPost, "/api/jobs/"+ref.ID+"/retention", map[string]any{})
-	if err != nil {
-		return c.fail(err)
-	}
-	return c.startAndMaybeWait(status, m, wait, follow)
+	run, err := c.app.Coord.StartRetention(job.ID, core.TriggerManual)
+	return c.startAndMaybeWait(run, err, wait, follow)
 }
 
 func (c *CLI) jobRuns(query string, args []string) int {
-	ref, err := c.resolveJob(query)
+	job, err := c.resolveJob(query)
 	if err != nil {
 		return c.fail(err)
 	}
@@ -423,46 +387,38 @@ func (c *CLI) jobRuns(query string, args []string) int {
 	if err := parseFlagSet(fs, args, helpJob()); err != nil {
 		return c.fail(err)
 	}
-	path := "/api/jobs/" + ref.ID + "/runs"
-	if *limit > 0 {
-		path += "?limit=" + strconv.Itoa(*limit)
-	}
-	status, m, err := c.doJSON(http.MethodGet, path, nil)
-	if err != nil {
-		return c.fail(err)
-	}
-	if err := c.requireOK(status, m); err != nil {
-		return c.fail(err)
-	}
-	return c.printRunList(m)
+	runs, total := c.app.Runs.Query("", "", job.ID, *limit)
+	return c.printRunList(runs, total)
 }
 
 func (c *CLI) jobSnapshots(query string) int {
-	ref, err := c.resolveJob(query)
+	job, err := c.resolveJob(query)
 	if err != nil {
 		return c.fail(err)
 	}
-	return c.printSnapshots("/api/jobs/" + ref.ID + "/snapshots")
+	repo, ok := c.app.Repos.Get(job.RepositoryID)
+	if !ok {
+		return c.fail(&core.ValidationError{Msg: "this job's storage repository no longer exists"})
+	}
+	return c.printSnapshots(&repo, job.ResticTag())
 }
 
-func (c *CLI) printRunList(m map[string]any) int {
+func (c *CLI) printRunList(runs []*core.Run, total int) int {
 	if c.cfg.json {
-		return c.writeJSONRaw(m)
+		return c.writeJSON(map[string]any{"ok": true, "runs": runs, "total": total})
 	}
 	rows := [][]string{}
-	for _, item := range asSlice(m["runs"]) {
-		r := asMap(item)
+	for _, r := range runs {
 		rows = append(rows, []string{
-			strField(r, "id"),
-			strField(r, "kind"),
-			strField(r, "status"),
-			dash(strField(r, "jobName")),
-			dash(strField(r, "repoName")),
-			timeField(r, "startedAt"),
+			r.ID,
+			string(r.Kind),
+			string(r.Status),
+			dash(r.JobName),
+			dash(r.RepoName),
+			formatTime(r.StartedAt),
 			summarizeProgress(r),
 		})
 	}
-	total := intField(m, "total")
 	c.printTable([]string{"ID", "KIND", "STATUS", "JOB", "REPO", "STARTED", "PROGRESS"}, rows)
 	if total > len(rows) {
 		fmt.Printf("\nshowing %d of %d\n", len(rows), total)

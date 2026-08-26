@@ -3,8 +3,9 @@
 # Production image for Coolify (Dockerfile build pack).
 # Runtime: restic-web on :8080 with restic on PATH; restic-webctl for CLI/agents.
 # Required env: DATABASE_URL
-# Optional: PORT (default 8080), ADDR, RESTIC_WEB_PASSWORD (for restic-webctl)
-# Persistent storage: mount a volume at /app/data for download workspaces + CLI session.
+# Optional: PORT (default 8080), ADDR
+# Persistent storage: mount a volume at /app/data for download workspaces.
+# restic-webctl talks to Postgres directly (no HTTP/auth): needs DATABASE_URL + data dir.
 
 FROM golang:1.25-bookworm AS builder
 
@@ -14,7 +15,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/restic-web . \
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/restic-web ./cmd/restic-web \
   && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/restic-webctl ./cmd/restic-webctl
 
 FROM debian:bookworm-slim
@@ -39,8 +40,7 @@ USER app
 ENV PORT=8080
 ENV ADDR=0.0.0.0:8080
 ENV PATH="/app:/usr/local/bin:${PATH}"
-ENV RESTIC_WEB_URL=http://127.0.0.1:8080
-ENV RESTIC_WEB_SESSION_FILE=/app/data/.restic-webctl-session
+ENV RESTIC_WEB_DATA=/app/data
 
 EXPOSE 8080
 

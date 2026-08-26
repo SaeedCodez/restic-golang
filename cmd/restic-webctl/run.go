@@ -1,12 +1,13 @@
 package main
 
 import (
+	"errors"
 	"fmt"
-	"net/http"
-	"net/url"
+	"io"
 	"os"
-	"strconv"
 	"time"
+
+	"restic-web/internal/core"
 )
 
 func (c *CLI) cmdRun(args []string) int {
@@ -59,72 +60,49 @@ func (c *CLI) runList(args []string) int {
 	if err := parseFlagSet(fs, args, helpRun()); err != nil {
 		return c.fail(err)
 	}
-	q := url.Values{}
-	if *status != "" {
-		q.Set("status", *status)
-	}
-	if *kind != "" {
-		q.Set("kind", *kind)
-	}
-	if *limit > 0 {
-		q.Set("limit", strconv.Itoa(*limit))
-	}
+	jobID := ""
 	if *job != "" {
 		ref, err := c.resolveJob(*job)
 		if err != nil {
 			return c.fail(err)
 		}
-		q.Set("jobId", ref.ID)
+		jobID = ref.ID
 	}
-	path := "/api/runs"
-	if enc := q.Encode(); enc != "" {
-		path += "?" + enc
-	}
-	st, m, err := c.doJSON(http.MethodGet, path, nil)
-	if err != nil {
-		return c.fail(err)
-	}
-	if err := c.requireOK(st, m); err != nil {
-		return c.fail(err)
-	}
-	return c.printRunList(m)
+	runs, total := c.app.Runs.Query(*status, *kind, jobID, *limit)
+	return c.printRunList(runs, total)
 }
 
 func (c *CLI) runGet(id string) int {
-	st, m, err := c.doJSON(http.MethodGet, "/api/runs/"+id, nil)
-	if err != nil {
-		return c.fail(err)
-	}
-	if err := c.requireOK(st, m); err != nil {
-		return c.fail(err)
+	run, ok := c.app.Runs.Get(id)
+	if !ok {
+		return c.fail(&apiError{Code: "not_found", Message: "run not found"})
 	}
 	if c.cfg.json {
-		return c.writeJSONRaw(m)
+		return c.writeJSON(map[string]any{"ok": true, "run": run})
 	}
-	r := asMap(m["run"])
-	fmt.Printf("id:\t%s\n", strField(r, "id"))
-	fmt.Printf("kind:\t%s\n", strField(r, "kind"))
-	fmt.Printf("status:\t%s\n", strField(r, "status"))
-	fmt.Printf("job:\t%s\n", dash(strField(r, "jobName")))
-	fmt.Printf("repo:\t%s\n", dash(strField(r, "repoName")))
-	fmt.Printf("folderPath:\t%s\n", dash(strField(r, "folderPath")))
-	fmt.Printf("startedAt:\t%s\n", timeField(r, "startedAt"))
-	if fa := timeField(r, "finishedAt"); fa != "" {
+	fmt.Printf("id:\t%s\n", run.ID)
+	fmt.Printf("kind:\t%s\n", run.Kind)
+	fmt.Printf("status:\t%s\n", run.Status)
+	fmt.Printf("job:\t%s\n", dash(run.JobName))
+	fmt.Printf("repo:\t%s\n", dash(run.RepoName))
+	fmt.Printf("folderPath:\t%s\n", dash(run.FolderPath))
+	fmt.Printf("startedAt:\t%s\n", formatTime(run.StartedAt))
+	if fa := formatTimePtr(run.FinishedAt); fa != "" {
 		fmt.Printf("finishedAt:\t%s\n", fa)
 	}
-	if p := summarizeProgress(r); p != "" {
+	if p := summarizeProgress(run); p != "" {
 		fmt.Printf("progress:\t%s\n", p)
 	}
-	if errMsg := strField(r, "error"); errMsg != "" {
-		fmt.Printf("error:\t%s\n", errMsg)
+	if run.Error != "" {
+		fmt.Printf("error:\t%s\n", run.Error)
 	}
-	if sum := asMap(r["summary"]); sum != nil {
-		if sid := strField(sum, "snapshotId"); sid != "" {
-			fmt.Printf("snapshotId:\t%s\n", sid)
+	if run.Summary != nil {
+		if run.Summary.SnapshotID != "" {
+			fmt.Printf("snapshotId:\t%s\n", run.Summary.SnapshotID)
 		}
-		fmt.Printf("dataAdded:\t%.0f\n", floatField(sum, "dataAdded"))
+		fmt.Printf("dataAdded:\t%d\n", run.Summary.DataAdded)
 	}
-	return runStatusExit(strField(r, "status"))
+	return runStatusExit(run.Status)
 }
 
 func (c *CLI) runLog(id string, args []string) int {
@@ -137,24 +115,18 @@ func (c *CLI) runLog(id string, args []string) int {
 	if *follow {
 		return c.runFollowLog(id, *after)
 	}
-	st, m, err := c.doJSON(http.MethodGet, fmt.Sprintf("/api/runs/%s/log?after=%d", id, *after), nil)
+	lines, err := c.app.Runs.ReadLog(id, *after)
 	if err != nil {
 		return c.fail(err)
 	}
-	if err := c.requireOK(st, m); err != nil {
-		return c.fail(err)
-	}
 	if c.cfg.json {
-		return c.writeJSONRaw(m)
+		return c.writeJSON(map[string]any{"ok": true, "lines": lines})
 	}
-	for _, item := range asSlice(m["lines"]) {
-		line := asMap(item)
-		level := strField(line, "level")
-		msg := strField(line, "message")
-		if level != "" && level != "info" {
-			fmt.Printf("[%s] %s\n", level, msg)
+	for _, line := range lines {
+		if line.Level != "" && line.Level != "info" {
+			fmt.Printf("[%s] %s\n", line.Level, line.Message)
 		} else {
-			fmt.Println(msg)
+			fmt.Println(line.Message)
 		}
 	}
 	return exitOK
@@ -168,54 +140,45 @@ func (c *CLI) runFollowLog(id string, after int64) int {
 		if err := c.printNewLogs(id, &cur); err != nil {
 			return c.fail(err)
 		}
-		st, m, err := c.doJSON(http.MethodGet, "/api/runs/"+id, nil)
-		if err != nil {
-			return c.fail(err)
+		run, ok := c.app.Runs.Get(id)
+		if !ok {
+			return c.fail(&apiError{Code: "not_found", Message: "run not found"})
 		}
-		if err := c.requireOK(st, m); err != nil {
-			return c.fail(err)
-		}
-		run := asMap(m["run"])
-		status := strField(run, "status")
-		if isTerminalStatus(status) {
+		if isTerminalStatus(run.Status) {
 			_ = c.printNewLogs(id, &cur)
 			if c.cfg.json {
 				_ = jsonStdout(map[string]any{"type": "done", "run": run})
 			}
-			return runStatusExit(status)
+			return runStatusExit(run.Status)
 		}
 		<-ticker.C
 	}
 }
 
 func (c *CLI) runWatch(id string) int {
-	if c.cfg.json {
-		final, err := c.waitForRun(id, true)
-		if err != nil {
-			return c.fail(err)
-		}
-		return c.writeJSON(map[string]any{"ok": true, "run": final})
-	}
 	final, err := c.waitForRun(id, true)
 	if err != nil {
 		return c.fail(err)
 	}
-	fmt.Printf("\nfinished: %s\n", strField(final, "status"))
-	return runStatusExit(strField(final, "status"))
+	if c.cfg.json {
+		return c.writeJSON(map[string]any{"ok": true, "run": final})
+	}
+	fmt.Printf("\nfinished: %s\n", final.Status)
+	return runStatusExit(final.Status)
 }
 
 func (c *CLI) runStop(id string) int {
-	st, m, err := c.doJSON(http.MethodPost, "/api/runs/"+id+"/stop", map[string]any{})
-	if err != nil {
-		return c.fail(err)
+	err := c.app.Coord.Stop(id)
+	if err == nil {
+		return c.okMessage("Stopping…", map[string]any{"id": id})
 	}
-	if err := c.requireOK(st, m); err != nil {
-		return c.fail(err)
+	if errors.Is(err, core.ErrRunNotActive) {
+		if _, ok := c.app.Runs.Get(id); ok {
+			return c.fail(&apiError{Code: "not_active", Message: "This run has already finished."})
+		}
+		return c.fail(&apiError{Code: "not_found", Message: "run not found"})
 	}
-	if c.cfg.json {
-		return c.writeJSONRaw(m)
-	}
-	return c.okMessage(dash(strField(m, "message")), map[string]any{"id": id})
+	return c.fail(err)
 }
 
 func (c *CLI) runDownload(id string, args []string) int {
@@ -232,8 +195,48 @@ func (c *CLI) runDownload(id string, args []string) int {
 	if path == "" {
 		path = id + ".zip"
 	}
-	if err := c.doDownload("/api/runs/"+id+"/download", path); err != nil {
+
+	run, ok := c.app.Runs.Get(id)
+	if !ok {
+		return c.fail(&apiError{Code: "not_found", Message: "run not found"})
+	}
+	if run.Kind != core.KindDownload {
+		return c.fail(&core.ValidationError{Msg: "this run is not a download"})
+	}
+	if run.Status != core.StatusSuccess {
+		return c.fail(&core.ConflictError{Msg: "the download is not ready"})
+	}
+	target := run.Params["target"]
+	if target == "" {
+		return c.fail(&apiError{Code: "not_found", Message: "download workspace is missing"})
+	}
+	if info, err := os.Stat(target); err != nil || !info.IsDir() {
+		return c.fail(&apiError{Code: "not_found", Message: "the download is no longer available; run it again"})
+	}
+
+	var w io.Writer
+	var closer io.Closer
+	if path == "-" {
+		w = os.Stdout
+	} else {
+		f, err := os.Create(path)
+		if err != nil {
+			return c.fail(err)
+		}
+		closer = f
+		w = f
+	}
+	if err := core.ZipDir(w, target); err != nil {
+		if closer != nil {
+			_ = closer.Close()
+		}
 		return c.fail(err)
+	}
+	if closer != nil {
+		_ = closer.Close()
+	}
+	if path == "-" {
+		return exitOK
 	}
 	return c.okMessage(fmt.Sprintf("Wrote %s", path), map[string]any{"path": path, "runId": id})
 }

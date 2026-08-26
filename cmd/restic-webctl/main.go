@@ -1,11 +1,13 @@
-// Command restic-webctl is the control CLI for a running restic-web server.
-// It talks to the JSON HTTP API (default http://127.0.0.1:8080) so it can
-// start/stop runs through the live coordinator — the same surface as the web UI.
+// Command restic-webctl is the control CLI for restic-web. It opens the same
+// Postgres-backed core.App as the web server and drives repositories, jobs, and
+// runs directly — no HTTP API and no session auth.
 package main
 
 import (
 	"fmt"
 	"os"
+
+	"restic-web/internal/core"
 )
 
 func main() {
@@ -13,6 +15,8 @@ func main() {
 }
 
 func run(args []string) int {
+	_ = core.LoadDotEnv(".env")
+
 	cfg, rest, err := parseGlobal(args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n\n%s\n", err, shortUsage())

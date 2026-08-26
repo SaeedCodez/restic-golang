@@ -2,8 +2,9 @@ package main
 
 import (
 	"fmt"
-	"net/http"
 	"os"
+
+	"restic-web/internal/core"
 )
 
 func (c *CLI) cmdFolder(args []string) int {
@@ -40,46 +41,31 @@ func (c *CLI) cmdFolder(args []string) int {
 }
 
 func (c *CLI) folderList() int {
-	items, err := c.listFolders()
-	if err != nil {
-		return c.fail(err)
-	}
+	items := c.app.Folders.List()
 	if c.cfg.json {
-		rows := make([]any, 0, len(items))
-		for _, it := range items {
-			rows = append(rows, it.Raw)
-		}
-		return c.writeJSON(map[string]any{"ok": true, "folders": rows})
+		return c.writeJSON(map[string]any{"ok": true, "folders": items})
 	}
 	rows := make([][]string, 0, len(items))
 	for _, it := range items {
-		rows = append(rows, []string{it.ID, it.Name, strField(it.Raw, "path")})
+		rows = append(rows, []string{it.ID, it.Name, it.Path})
 	}
 	c.printTable([]string{"ID", "NAME", "PATH"}, rows)
 	return exitOK
 }
 
 func (c *CLI) folderGet(query string) int {
-	ref, err := c.resolveFolder(query)
+	f, err := c.resolveFolder(query)
 	if err != nil {
-		return c.fail(err)
-	}
-	status, m, err := c.doJSON(http.MethodGet, "/api/folders/"+ref.ID, nil)
-	if err != nil {
-		return c.fail(err)
-	}
-	if err := c.requireOK(status, m); err != nil {
 		return c.fail(err)
 	}
 	if c.cfg.json {
-		return c.writeJSONRaw(m)
+		return c.writeJSON(map[string]any{"ok": true, "folder": f})
 	}
-	f := asMap(m["folder"])
-	fmt.Printf("id:\t%s\n", strField(f, "id"))
-	fmt.Printf("name:\t%s\n", strField(f, "name"))
-	fmt.Printf("path:\t%s\n", strField(f, "path"))
-	fmt.Printf("createdAt:\t%s\n", timeField(f, "createdAt"))
-	fmt.Printf("updatedAt:\t%s\n", timeField(f, "updatedAt"))
+	fmt.Printf("id:\t%s\n", f.ID)
+	fmt.Printf("name:\t%s\n", f.Name)
+	fmt.Printf("path:\t%s\n", f.Path)
+	fmt.Printf("createdAt:\t%s\n", formatTime(f.CreatedAt))
+	fmt.Printf("updatedAt:\t%s\n", formatTime(f.UpdatedAt))
 	return exitOK
 }
 
@@ -93,27 +79,24 @@ func (c *CLI) folderCreate(args []string) int {
 	if *name == "" || *path == "" {
 		return c.fail(usagef("--name and --path are required\n\n%s", helpFolder()))
 	}
-	status, m, err := c.doJSON(http.MethodPost, "/api/folders", map[string]string{
-		"name": *name,
-		"path": *path,
-	})
+	f := core.Folder{Meta: core.Meta{Name: *name}, Path: *path}
+	if err := f.Validate(); err != nil {
+		return c.fail(&core.ValidationError{Msg: err.Error()})
+	}
+	created, err := c.app.Folders.Create(f)
 	if err != nil {
 		return c.fail(err)
 	}
-	if err := c.requireOK(status, m); err != nil {
-		return c.fail(err)
-	}
 	if c.cfg.json {
-		return c.writeJSONRaw(m)
+		return c.writeJSON(map[string]any{"ok": true, "folder": created})
 	}
-	f := asMap(m["folder"])
-	c.note("Created folder %s (%s)", strField(f, "name"), strField(f, "id"))
-	fmt.Println(strField(f, "id"))
+	c.note("Created folder %s (%s)", created.Name, created.ID)
+	fmt.Println(created.ID)
 	return exitOK
 }
 
 func (c *CLI) folderUpdate(query string, args []string) int {
-	ref, err := c.resolveFolder(query)
+	existing, err := c.resolveFolder(query)
 	if err != nil {
 		return c.fail(err)
 	}
@@ -123,40 +106,38 @@ func (c *CLI) folderUpdate(query string, args []string) int {
 	if err := parseFlagSet(fs, args, helpFolder()); err != nil {
 		return c.fail(err)
 	}
-	body := map[string]string{
-		"name": ref.Name,
-		"path": strField(ref.Raw, "path"),
-	}
+	upd := existing
 	if *name != "" {
-		body["name"] = *name
+		upd.Name = *name
 	}
 	if *path != "" {
-		body["path"] = *path
+		upd.Path = *path
 	}
-	status, m, err := c.doJSON(http.MethodPut, "/api/folders/"+ref.ID, body)
+	if err := upd.Validate(); err != nil {
+		return c.fail(&core.ValidationError{Msg: err.Error()})
+	}
+	updated, err := c.app.Folders.Update(existing.ID, upd)
 	if err != nil {
-		return c.fail(err)
-	}
-	if err := c.requireOK(status, m); err != nil {
 		return c.fail(err)
 	}
 	if c.cfg.json {
-		return c.writeJSONRaw(m)
+		return c.writeJSON(map[string]any{"ok": true, "folder": updated})
 	}
-	return c.okMessage("Folder updated.", map[string]any{"id": ref.ID})
+	return c.okMessage("Folder updated.", map[string]any{"id": existing.ID})
 }
 
 func (c *CLI) folderDelete(query string) int {
-	ref, err := c.resolveFolder(query)
+	f, err := c.resolveFolder(query)
 	if err != nil {
 		return c.fail(err)
 	}
-	status, m, err := c.doJSON(http.MethodDelete, "/api/folders/"+ref.ID, nil)
-	if err != nil {
+	if using := c.app.JobsUsingFolder(f.ID); len(using) > 0 {
+		return c.fail(&core.ConflictError{
+			Msg: "This folder is used by " + jobNames(using) + ". Delete or edit those jobs first.",
+		})
+	}
+	if err := c.app.Folders.Delete(f.ID); err != nil {
 		return c.fail(err)
 	}
-	if err := c.requireOK(status, m); err != nil {
-		return c.fail(err)
-	}
-	return c.okMessage(fmt.Sprintf("Deleted folder %s.", ref.Name), map[string]any{"id": ref.ID})
+	return c.okMessage(fmt.Sprintf("Deleted folder %s.", f.Name), map[string]any{"id": f.ID})
 }

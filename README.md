@@ -105,7 +105,7 @@ go run . -addr 127.0.0.1:9000 -data ./data
 Build standalone binaries (the web UI is embedded in `restic-web`):
 
 ```sh
-go build -o restic-web .
+go build -o restic-web ./cmd/restic-web
 go build -o restic-webctl ./cmd/restic-webctl
 ./restic-web
 ```
@@ -123,13 +123,12 @@ go test ./...
 
 ### CLI (`restic-webctl`)
 
-Every UI capability is also available from a shell via **`restic-webctl`**, a
-thin HTTP client against the running server (default `http://127.0.0.1:8080`).
-It is built into the Docker image for Coolify and is the supported surface for
-operators and AI agents with container shell access.
+Every UI capability is also available from a shell via **`restic-webctl`**.
+It uses the same Postgres database and shared core logic as the web app
+(**no HTTP, no login**). It is built into the Docker image for Coolify and is
+the supported surface for operators and AI agents with container shell access.
 
 ```sh
-export RESTIC_WEB_PASSWORD='…'   # same password as the web login
 restic-webctl --json status
 restic-webctl job run <id|name> --wait
 ```
@@ -228,7 +227,9 @@ server.go          routing + shared HTTP helpers
 handlers_*.go      HTTP handlers: entities, runs, repo ops, SSE, status
 sysproc_*.go       process-group setup / signalling (unix, windows)
 reap_*.go          orphan identification (linux via /proc; no-op elsewhere)
-cmd/restic-webctl/ control CLI (HTTP client; full UI parity) — see docs/cli.md
+cmd/restic-web/   server binary (embeds web UI)
+cmd/restic-webctl/ control CLI (direct core.App; no HTTP/auth) — see docs/cli.md
+internal/core/     shared app, stores, coordinator, HTTP handlers
 ui/                UI source (React + Tailwind + shadcn/ui) — see below
 web/               built UI, committed and embedded into the binary
 Dockerfile         Coolify image: restic-web + restic-webctl + restic
@@ -236,7 +237,8 @@ Dockerfile         Coolify image: restic-web + restic-webctl + restic
 
 ### A note on the HTTP API
 
-The UI talks to a plain JSON API. **`restic-webctl`** is the supported CLI for
+The UI talks to a plain JSON API. **`restic-webctl`** is the supported CLI (same
+core logic, no HTTP) for
 that API (see [docs/cli.md](docs/cli.md)); you can also call it directly:
 
 | Endpoint | Notes |

@@ -2,62 +2,14 @@ package main
 
 import (
 	"fmt"
-	"net/http"
 	"strings"
+
+	"restic-web/internal/core"
 )
 
 type entityRef struct {
 	ID   string
 	Name string
-	Raw  map[string]any
-}
-
-func (c *CLI) listFolders() ([]entityRef, error) {
-	status, m, err := c.doJSON(http.MethodGet, "/api/folders", nil)
-	if err != nil {
-		return nil, err
-	}
-	if err := c.requireOK(status, m); err != nil {
-		return nil, err
-	}
-	var out []entityRef
-	for _, item := range asSlice(m["folders"]) {
-		fm := asMap(item)
-		out = append(out, entityRef{ID: strField(fm, "id"), Name: strField(fm, "name"), Raw: fm})
-	}
-	return out, nil
-}
-
-func (c *CLI) listRepos() ([]entityRef, error) {
-	status, m, err := c.doJSON(http.MethodGet, "/api/repositories", nil)
-	if err != nil {
-		return nil, err
-	}
-	if err := c.requireOK(status, m); err != nil {
-		return nil, err
-	}
-	var out []entityRef
-	for _, item := range asSlice(m["repositories"]) {
-		fm := asMap(item)
-		out = append(out, entityRef{ID: strField(fm, "id"), Name: strField(fm, "name"), Raw: fm})
-	}
-	return out, nil
-}
-
-func (c *CLI) listJobs() ([]entityRef, error) {
-	status, m, err := c.doJSON(http.MethodGet, "/api/jobs", nil)
-	if err != nil {
-		return nil, err
-	}
-	if err := c.requireOK(status, m); err != nil {
-		return nil, err
-	}
-	var out []entityRef
-	for _, item := range asSlice(m["jobs"]) {
-		fm := asMap(item)
-		out = append(out, entityRef{ID: strField(fm, "id"), Name: strField(fm, "name"), Raw: fm})
-	}
-	return out, nil
 }
 
 func resolveRef(kind, query string, items []entityRef) (entityRef, error) {
@@ -96,30 +48,57 @@ func resolveRef(kind, query string, items []entityRef) (entityRef, error) {
 	case len(prefixName) > 1:
 		return entityRef{}, usagef("ambiguous %s name prefix %q (%d matches)", kind, q, len(prefixName))
 	default:
-		return entityRef{}, &apiError{Status: 404, Code: "not_found", Message: fmt.Sprintf("%s %q not found", kind, q)}
+		return entityRef{}, &apiError{Code: "not_found", Message: fmt.Sprintf("%s %q not found", kind, q)}
 	}
 }
 
-func (c *CLI) resolveFolder(query string) (entityRef, error) {
-	items, err := c.listFolders()
-	if err != nil {
-		return entityRef{}, err
+func (c *CLI) resolveFolder(query string) (core.Folder, error) {
+	items := c.app.Folders.List()
+	refs := make([]entityRef, 0, len(items))
+	for _, it := range items {
+		refs = append(refs, entityRef{ID: it.ID, Name: it.Name})
 	}
-	return resolveRef("folder", query, items)
+	ref, err := resolveRef("folder", query, refs)
+	if err != nil {
+		return core.Folder{}, err
+	}
+	f, ok := c.app.Folders.Get(ref.ID)
+	if !ok {
+		return core.Folder{}, &apiError{Code: "not_found", Message: fmt.Sprintf("folder %q not found", query)}
+	}
+	return f, nil
 }
 
-func (c *CLI) resolveRepo(query string) (entityRef, error) {
-	items, err := c.listRepos()
-	if err != nil {
-		return entityRef{}, err
+func (c *CLI) resolveRepo(query string) (core.Repository, error) {
+	items := c.app.Repos.List()
+	refs := make([]entityRef, 0, len(items))
+	for _, it := range items {
+		refs = append(refs, entityRef{ID: it.ID, Name: it.Name})
 	}
-	return resolveRef("repository", query, items)
+	ref, err := resolveRef("repository", query, refs)
+	if err != nil {
+		return core.Repository{}, err
+	}
+	r, ok := c.app.Repos.Get(ref.ID)
+	if !ok {
+		return core.Repository{}, &apiError{Code: "not_found", Message: fmt.Sprintf("repository %q not found", query)}
+	}
+	return r, nil
 }
 
-func (c *CLI) resolveJob(query string) (entityRef, error) {
-	items, err := c.listJobs()
-	if err != nil {
-		return entityRef{}, err
+func (c *CLI) resolveJob(query string) (core.Job, error) {
+	items := c.app.Jobs.List()
+	refs := make([]entityRef, 0, len(items))
+	for _, it := range items {
+		refs = append(refs, entityRef{ID: it.ID, Name: it.Name})
 	}
-	return resolveRef("job", query, items)
+	ref, err := resolveRef("job", query, refs)
+	if err != nil {
+		return core.Job{}, err
+	}
+	j, ok := c.app.Jobs.Get(ref.ID)
+	if !ok {
+		return core.Job{}, &apiError{Code: "not_found", Message: fmt.Sprintf("job %q not found", query)}
+	}
+	return j, nil
 }

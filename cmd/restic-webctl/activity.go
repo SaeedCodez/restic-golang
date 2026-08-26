@@ -2,9 +2,7 @@ package main
 
 import (
 	"fmt"
-	"net/http"
 	"os"
-	"strconv"
 )
 
 func (c *CLI) cmdActivity(args []string) int {
@@ -18,45 +16,30 @@ func (c *CLI) cmdActivity(args []string) int {
 		return c.fail(err)
 	}
 
-	stActive, activeBody, err := c.doJSON(http.MethodGet, "/api/runs?status=active", nil)
-	if err != nil {
-		return c.fail(err)
-	}
-	if err := c.requireOK(stActive, activeBody); err != nil {
-		return c.fail(err)
-	}
-
-	stFin, finBody, err := c.doJSON(http.MethodGet, "/api/runs?status=finished&limit="+strconv.Itoa(*limit), nil)
-	if err != nil {
-		return c.fail(err)
-	}
-	if err := c.requireOK(stFin, finBody); err != nil {
-		return c.fail(err)
-	}
+	active, activeTotal := c.app.Runs.Query("active", "", "", 0)
+	recent, recentTotal := c.app.Runs.Query("finished", "", "", *limit)
 
 	if c.cfg.json {
 		return c.writeJSON(map[string]any{
-			"ok":       true,
-			"active":   asSlice(activeBody["runs"]),
-			"recent":   asSlice(finBody["runs"]),
-			"activeTotal": intField(activeBody, "total"),
-			"recentTotal": intField(finBody, "total"),
+			"ok":          true,
+			"active":      active,
+			"recent":      recent,
+			"activeTotal": activeTotal,
+			"recentTotal": recentTotal,
 		})
 	}
 
 	fmt.Println("Active runs")
-	active := asSlice(activeBody["runs"])
 	if len(active) == 0 {
 		fmt.Println("  (none)")
 	} else {
 		rows := make([][]string, 0, len(active))
-		for _, item := range active {
-			r := asMap(item)
+		for _, r := range active {
 			rows = append(rows, []string{
-				strField(r, "id"),
-				strField(r, "kind"),
-				strField(r, "status"),
-				dash(strField(r, "jobName")),
+				r.ID,
+				string(r.Kind),
+				string(r.Status),
+				dash(r.JobName),
 				summarizeProgress(r),
 			})
 		}
@@ -65,19 +48,17 @@ func (c *CLI) cmdActivity(args []string) int {
 
 	fmt.Println()
 	fmt.Println("Recent history")
-	recent := asSlice(finBody["runs"])
 	if len(recent) == 0 {
 		fmt.Println("  (none)")
 	} else {
 		rows := make([][]string, 0, len(recent))
-		for _, item := range recent {
-			r := asMap(item)
+		for _, r := range recent {
 			rows = append(rows, []string{
-				strField(r, "id"),
-				strField(r, "kind"),
-				strField(r, "status"),
-				dash(strField(r, "jobName")),
-				timeField(r, "startedAt"),
+				r.ID,
+				string(r.Kind),
+				string(r.Status),
+				dash(r.JobName),
+				formatTime(r.StartedAt),
 			})
 		}
 		c.printTable([]string{"ID", "KIND", "STATUS", "JOB", "STARTED"}, rows)

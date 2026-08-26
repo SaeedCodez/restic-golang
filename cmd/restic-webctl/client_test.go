@@ -1,12 +1,10 @@
 package main
 
 import (
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
-	"os"
-	"path/filepath"
+	"errors"
 	"testing"
+
+	"restic-web/internal/core"
 )
 
 func TestExitCodeOf(t *testing.T) {
@@ -20,8 +18,15 @@ func TestExitCodeOf(t *testing.T) {
 		{&apiError{Code: "not_found"}, exitNotFound},
 		{&apiError{Code: "busy"}, exitConflict},
 		{&apiError{Code: "conflict"}, exitConflict},
-		{&apiError{Status: 500, Message: "boom"}, exitError},
+		{&apiError{Code: "not_active"}, exitConflict},
+		{&apiError{Message: "boom"}, exitError},
 		{usagef("bad"), exitUsage},
+		{&core.BusyError{RepoName: "r"}, exitConflict},
+		{&core.ConflictError{Msg: "c"}, exitConflict},
+		{&core.NotFoundError{Msg: "n"}, exitNotFound},
+		{&core.ValidationError{Msg: "v"}, exitError},
+		{core.ErrRunNotActive, exitConflict},
+		{errors.New("other"), exitError},
 	}
 	for _, tc := range cases {
 		if got := exitCodeOf(tc.err); got != tc.want {
@@ -54,68 +59,34 @@ func TestResolveRef(t *testing.T) {
 	}
 }
 
-func TestClientLoginAndGet(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /api/auth/login", func(w http.ResponseWriter, r *http.Request) {
-		http.SetCookie(w, &http.Cookie{Name: sessionCookieName, Value: "tok123", Path: "/"})
-		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "authenticated": true})
-	})
-	mux.HandleFunc("GET /api/status", func(w http.ResponseWriter, r *http.Request) {
-		c, err := r.Cookie(sessionCookieName)
-		if err != nil || c.Value != "tok123" {
-			w.WriteHeader(http.StatusUnauthorized)
-			_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "code": "unauthorized", "error": "Please log in."})
-			return
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"ok": true, "resticInstalled": true,
-			"counts": map[string]int{"repositories": 1, "folders": 2, "jobs": 3},
-			"activeRuns": []any{},
-		})
-	})
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-
-	dir := t.TempDir()
-	session := filepath.Join(dir, "session")
-	cfg := &config{
-		url:         srv.URL,
-		password:    "secret",
-		sessionFile: session,
-		timeout:     0,
-	}
-	cli, err := newCLI(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Force unauthorized path then auto-login.
-	status, m, err := cli.doJSON(http.MethodGet, "/api/status", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if status != 200 || !truthy(m["ok"]) {
-		t.Fatalf("status=%d body=%v", status, m)
-	}
-	tok, err := os.ReadFile(session)
-	if err != nil || string(tok) != "tok123" {
-		t.Fatalf("session file=%q err=%v", tok, err)
-	}
-}
-
 func TestParseGlobal(t *testing.T) {
-	cfg, rest, err := parseGlobal([]string{"--json", "--url", "http://example:9", "status"})
+	cfg, rest, err := parseGlobal([]string{"--json", "--database", "postgres://x", "status"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.json || cfg.url != "http://example:9" || len(rest) != 1 || rest[0] != "status" {
+	if !cfg.json || cfg.database != "postgres://x" || len(rest) != 1 || rest[0] != "status" {
 		t.Fatalf("cfg=%+v rest=%v", cfg, rest)
 	}
 
-	cfg, rest, err = parseGlobal([]string{"auth", "status", "--json", "--url=http://example:9"})
+	cfg, rest, err = parseGlobal([]string{"auth", "status", "--json", "--data=/tmp/data"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.json || cfg.url != "http://example:9" || len(rest) != 2 || rest[0] != "auth" || rest[1] != "status" {
+	if !cfg.json || cfg.dataDir != "/tmp/data" || len(rest) != 2 || rest[0] != "auth" || rest[1] != "status" {
 		t.Fatalf("relocated globals: cfg=%+v rest=%v", cfg, rest)
+	}
+}
+
+func TestRepoViewOfRedactsSecrets(t *testing.T) {
+	v := repoViewOf(core.Repository{
+		Meta:      core.Meta{Name: "r"},
+		Password:  "secret",
+		SecretKey: "sk",
+	})
+	if v.Password != "" || v.SecretKey != "" {
+		t.Fatalf("secrets leaked: %+v", v)
+	}
+	if !v.HasPassword || !v.HasSecretKey {
+		t.Fatalf("flags: %+v", v)
 	}
 }

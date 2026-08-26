@@ -3,46 +3,35 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"time"
+
+	"restic-web/internal/core"
 )
 
-func isTerminalStatus(status string) bool {
-	switch status {
-	case "success", "success_warnings", "failed", "canceled", "interrupted":
-		return true
-	default:
-		return false
-	}
+func isTerminalStatus(status core.RunStatus) bool {
+	return status.Terminal()
 }
 
 // waitForRun polls run status (and optionally logs) until terminal.
-// When followLogs is true, new log lines are printed as they arrive.
-func (c *CLI) waitForRun(runID string, followLogs bool) (map[string]any, error) {
+func (c *CLI) waitForRun(runID string, followLogs bool) (*core.Run, error) {
 	after := int64(0)
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
-		status, m, err := c.doJSON(http.MethodGet, "/api/runs/"+runID, nil)
-		if err != nil {
-			return nil, err
+		run, ok := c.app.Runs.Get(runID)
+		if !ok {
+			return nil, &apiError{Code: "not_found", Message: "run not found"}
 		}
-		if err := c.requireOK(status, m); err != nil {
-			return nil, err
-		}
-		run := asMap(m["run"])
-		st := strField(run, "status")
+		st := run.Status
 
 		if followLogs {
 			if err := c.printNewLogs(runID, &after); err != nil {
 				return nil, err
 			}
 		} else if !c.cfg.json && !c.cfg.quiet {
-			prog := asMap(run["progress"])
-			pct := floatField(prog, "percent")
-			fmt.Fprintf(os.Stderr, "\r%s %s %.0f%%   ", shortID(runID), st, pct)
+			fmt.Fprintf(os.Stderr, "\r%s %s %.0f%%   ", shortID(runID), st, run.Progress.Percent)
 		}
 
 		if isTerminalStatus(st) {
@@ -60,30 +49,22 @@ func (c *CLI) waitForRun(runID string, followLogs bool) (map[string]any, error) 
 }
 
 func (c *CLI) printNewLogs(runID string, after *int64) error {
-	status, m, err := c.doJSON(http.MethodGet, fmt.Sprintf("/api/runs/%s/log?after=%d", runID, *after), nil)
+	lines, err := c.app.Runs.ReadLog(runID, *after)
 	if err != nil {
 		return err
 	}
-	if err := c.requireOK(status, m); err != nil {
-		return err
-	}
-	for _, item := range asSlice(m["lines"]) {
-		line := asMap(item)
-		seq := int64(floatField(line, "seq"))
-		if seq > *after {
-			*after = seq
+	for _, line := range lines {
+		if line.Seq > *after {
+			*after = line.Seq
 		}
 		if c.cfg.json {
-			encLine := map[string]any{"type": "log", "line": line}
-			_ = jsonStdout(encLine)
+			_ = jsonStdout(map[string]any{"type": "log", "line": line})
 			continue
 		}
-		level := strField(line, "level")
-		msg := strField(line, "message")
-		if level != "" && level != "info" {
-			fmt.Printf("[%s] %s\n", level, msg)
+		if line.Level != "" && line.Level != "info" {
+			fmt.Printf("[%s] %s\n", line.Level, line.Message)
 		} else {
-			fmt.Println(msg)
+			fmt.Println(line.Message)
 		}
 	}
 	return nil
@@ -98,20 +79,15 @@ func jsonStdout(v any) error {
 	return err
 }
 
-func (c *CLI) startAndMaybeWait(status int, m map[string]any, wait, follow bool) int {
-	if err := c.requireOK(status, m); err != nil {
+func (c *CLI) startAndMaybeWait(run *core.Run, err error, wait, follow bool) int {
+	if err != nil {
 		return c.fail(err)
 	}
-	runID := strField(m, "runId")
-	if runID == "" {
-		if run := asMap(m["run"]); run != nil {
-			runID = strField(run, "id")
-		}
-	}
+	runID := run.ID
 
 	if !wait && !follow {
 		if c.cfg.json {
-			return c.writeJSONRaw(m)
+			return c.writeJSON(map[string]any{"ok": true, "runId": runID, "run": run})
 		}
 		c.note("Started run %s", runID)
 		fmt.Println(runID)
@@ -126,31 +102,25 @@ func (c *CLI) startAndMaybeWait(status int, m map[string]any, wait, follow bool)
 	if err != nil {
 		return c.fail(err)
 	}
-	st := strField(final, "status")
+	st := final.Status
 	if c.cfg.json {
-		return c.writeJSON(map[string]any{"ok": isTerminalStatus(st) && (st == "success" || st == "success_warnings"), "runId": runID, "run": final})
+		ok := st == core.StatusSuccess || st == core.StatusSuccessWarnings
+		return c.writeJSON(map[string]any{"ok": ok, "runId": runID, "run": final})
 	}
 	fmt.Printf("run %s finished: %s\n", runID, st)
-	if errMsg := strField(final, "error"); errMsg != "" {
-		fmt.Fprintf(os.Stderr, "error: %s\n", errMsg)
+	if final.Error != "" {
+		fmt.Fprintf(os.Stderr, "error: %s\n", final.Error)
 	}
-	switch st {
-	case "success", "success_warnings":
-		return exitOK
-	case "canceled", "interrupted":
-		return exitConflict
-	default:
-		return exitError
-	}
+	return runStatusExit(st)
 }
 
-func runStatusExit(st string) int {
+func runStatusExit(st core.RunStatus) int {
 	switch st {
-	case "success", "success_warnings":
+	case core.StatusSuccess, core.StatusSuccessWarnings:
 		return exitOK
-	case "canceled", "interrupted":
+	case core.StatusCanceled, core.StatusInterrupted:
 		return exitConflict
-	case "failed":
+	case core.StatusFailed:
 		return exitError
 	default:
 		return exitOK
@@ -167,17 +137,14 @@ func parseWaitFollow(args []string) (rest []string, wait, follow bool) {
 	return rest, wait, follow
 }
 
-func summarizeProgress(run map[string]any) string {
-	prog := asMap(run["progress"])
-	if prog == nil {
+func summarizeProgress(run *core.Run) string {
+	if run == nil {
 		return ""
 	}
-	pct := floatField(prog, "percent")
-	cur := strField(prog, "currentFile")
+	pct := run.Progress.Percent
+	cur := run.Progress.CurrentFile
 	if cur != "" {
 		return fmt.Sprintf("%.0f%% %s", pct, cur)
 	}
 	return fmt.Sprintf("%.0f%%", pct)
 }
-
-
