@@ -30,6 +30,17 @@ func run(args []string) int {
 		fmt.Fprint(os.Stderr, shortUsage())
 		return exitUsage
 	}
+	// Relocatable --help was stripped from args; put it back so
+	// "restic-webctl job --help" reaches the command's help path.
+	if cfg.help {
+		rest = append(rest, "--help")
+	}
+
+	// Command help should not require a database connection.
+	if wantHelp(rest[1:]) || (len(rest) == 1 && cfg.help) {
+		cli := &CLI{cfg: cfg}
+		return cli.dispatch(rest)
+	}
 
 	cli, err := newCLI(cfg)
 	if err != nil {
