@@ -5,6 +5,7 @@ import {
   CircleAlert,
   FolderOpen,
   HardDrive,
+  LayoutDashboard,
   Loader2,
   LogOut,
   Monitor,
@@ -28,6 +29,7 @@ import { useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
 const NAV = [
+  { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { to: "/jobs", label: "Jobs", icon: Play },
   { to: "/repositories", label: "Repositories", icon: HardDrive },
   { to: "/folders", label: "Folders", icon: FolderOpen },
@@ -37,7 +39,7 @@ const NAV = [
 function Brand() {
   return (
     <Link
-      to="/jobs"
+      to="/dashboard"
       className="flex shrink-0 items-center gap-2.5 rounded-md py-1 pr-2 transition-opacity hover:opacity-80"
     >
       <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary text-primary-foreground">
@@ -57,8 +59,8 @@ function Brand() {
 }
 
 /**
- * NavTabs is the app's primary navigation: a single segmented box, so the four
- * sections read as one control rather than four loose links.
+ * NavTabs is the app's primary navigation: a single segmented box, so the
+ * primary sections read as one control rather than loose links.
  */
 function NavTabs({ className, activeCount }) {
   return (
@@ -221,8 +223,11 @@ export function Shell() {
       <header className="sticky top-0 z-40 border-b border-border bg-background/85 backdrop-blur">
         <div className="mx-auto flex w-full max-w-5xl items-center gap-3 px-5 py-2.5 sm:px-8">
           <Brand />
-          {/* Wide screens carry the nav inline; narrow ones get it on its own row. */}
-          <NavTabs className="hidden lg:flex" activeCount={activeCount} />
+          {/* Wide screens carry the nav inline; narrow ones get it on its own row.
+              Mid-width desktops (~1024px) may need horizontal scroll with five tabs. */}
+          <div className="hidden min-w-0 flex-1 overflow-x-auto scroll-thin lg:block">
+            <NavTabs className="w-max" activeCount={activeCount} />
+          </div>
           <div className="ml-auto flex shrink-0 items-center gap-1.5">
             <ActivityIndicator />
             <ResticStatus />

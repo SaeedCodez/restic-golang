@@ -11,7 +11,7 @@ built around three things you create and manage:
 - **Backup jobs** — the core concept: a saved, named pairing of one folder and
   one repository. A job is the thing you run, look at, and come back to.
 
-![Backup jobs, the home screen: each job shows its last outcome, and a job running right now shows live progress inline](docs/screenshots/jobs.png)
+![Dashboard, the home screen: inventory counts, live runs, and upcoming schedules](docs/screenshots/dashboard.png)
 
 Everything long-running — backups, restores, repository setup, and old-snapshot
 restores/downloads — is a **run**: a durable record with its own live progress
@@ -53,9 +53,9 @@ anything in flight, then filterable history across every job and repository.
 
 A few things worth knowing from the screenshots above:
 
-- **Health is on the home screen.** Each job card carries its last outcome, when
-  it ran and how much it stored, so "is anything broken?" is answered without
-  clicking into anything.
+- **Health is on the home screen.** The Dashboard summarises inventory, live
+  runs, overdue schedules, and recent backup failures. Each job card still
+  carries its last outcome, so "is anything broken?" is answered at a glance.
 - **Contention is explained, not dead-ended.** Operations are serialized per
   repository; if one is in the way you get told which run holds it, with a link
   straight to it.

@@ -1,9 +1,7 @@
 import * as React from "react";
-import { Link } from "react-router-dom";
-import { Activity as ActivityIcon, History, RefreshCw } from "lucide-react";
+import { History, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
 import {
   Select,
   SelectContent,
@@ -14,53 +12,13 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/empty";
 import { Page, PageHeader } from "@/components/page";
-import { RunHistory, RunKindCell } from "@/components/run-history";
-import { StatusBadge } from "@/components/status-badge";
+import { ActiveRunsCard } from "@/components/active-runs";
+import { RunHistory } from "@/components/run-history";
 import { Runs } from "@/lib/api";
 import { useFetch } from "@/lib/use-fetch";
-import { useLive, useRunStream } from "@/lib/live";
-import { fmtRelative, runDuration } from "@/lib/format";
-import { displayPercent } from "@/lib/runs";
+import { useLive } from "@/lib/live";
 
 const HISTORY_LIMIT = 40;
-
-/** A live row for something happening right now, with its own progress stream. */
-function ActiveRunRow({ run }) {
-  const { run: liveRun } = useRunStream(run.id, { withLog: false });
-  const live = liveRun || run;
-  const pct = displayPercent(live);
-
-  return (
-    <Link
-      to={`/runs/${live.id}`}
-      className="block px-5 py-4 transition-colors hover:bg-accent/40"
-    >
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex min-w-0 flex-wrap items-center gap-2.5 text-sm font-medium">
-          <RunKindCell kind={live.kind} />
-          <span className="truncate text-muted-foreground">
-            {live.jobName || live.repoName || "—"}
-          </span>
-          <StatusBadge status={live.status} />
-        </div>
-        <span className="tabular text-sm font-medium">
-          {pct === 0 && !live.progress?.totalBytes ? "—" : Math.round(pct) + "%"}
-        </span>
-      </div>
-
-      <div className="mt-2.5">
-        <Progress value={pct} indeterminate={pct === 0 && !live.progress?.totalBytes} />
-      </div>
-
-      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-        <span className="truncate font-mono">{live.progress?.currentFile || ""}</span>
-        <span className="tabular shrink-0">
-          started {fmtRelative(live.startedAt)} · {runDuration(live)}
-        </span>
-      </div>
-    </Link>
-  );
-}
 
 const KIND_FILTERS = [
   { value: "all", label: "All operations" },
@@ -119,34 +77,7 @@ export default function ActivityRoute() {
       />
 
       <div className="space-y-4">
-        <Card>
-          <CardHeader>
-            <div className="min-w-0 flex-1">
-              <CardTitle>Running now</CardTitle>
-              <CardDescription className="mt-1">
-                Operations in progress, updating live.
-              </CardDescription>
-            </div>
-          </CardHeader>
-          {activeRuns.length === 0 ? (
-            <div className="px-5 pb-5">
-              <EmptyState
-                icon={ActivityIcon}
-                title="Nothing is running"
-                description="Start a backup from a job and it will appear here, with live progress."
-              />
-            </div>
-          ) : (
-            <div className="divide-y divide-border border-t border-border">
-              {activeRuns
-                .slice()
-                .sort((a, b) => new Date(b.startedAt) - new Date(a.startedAt))
-                .map((run) => (
-                  <ActiveRunRow key={run.id} run={run} />
-                ))}
-            </div>
-          )}
-        </Card>
+        <ActiveRunsCard runs={activeRuns} />
 
         <Card>
           <CardHeader>

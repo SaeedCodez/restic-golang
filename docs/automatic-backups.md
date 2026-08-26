@@ -88,7 +88,8 @@ add derived fields — do not persist them:
 - `overdue` means: enabled, last **successful** backup is older than one
   period, and nothing is running
 
-Health stays on the home screen, which is already the product’s rule.
+Health stays glanceable on the Dashboard (and on each job card), which is
+already the product’s rule.
 
 On the Run, record why it started:
 
@@ -196,9 +197,12 @@ Change `StartBackup` to accept a trigger (or a small options struct) so HTTP
 
 ## UI
 
-Stay on the existing surfaces. No new primary nav item.
+**Dashboard (home screen)**  
+Needs-attention and overdue schedules surface here as a summary desk. Upcoming
+schedules and recent backup failures deep-link into Jobs / Activity. Do not add
+charts or a separate Schedules nav item.
 
-**Job card (home screen)**  
+**Job card**  
 Schedule line under last-run: `Daily at 02:00 · next in 4h`, or amber
 `Overdue · last success 2 days ago`. Running scheduled backups already show
 live progress via SSE.
@@ -211,7 +215,7 @@ A “Automatic backup” card: enable/disable, preset, time, weekdays. Pause is
 Optional “Also run automatically,” default **off**. Automatic backups should
 be a conscious choice.
 
-The jobs list API already returns everything the home screen needs in one
+The jobs list API already returns everything Dashboard and Jobs need in one
 request. Keep that: compute `nextDueAt` / `scheduleState` in `viewWith`.
 
 ---

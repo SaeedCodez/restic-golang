@@ -13,7 +13,7 @@ export default function NotFound() {
         description="The link may be out of date, or the thing it pointed at was deleted."
         action={
           <Button asChild>
-            <Link to="/jobs">Go to jobs</Link>
+            <Link to="/dashboard">Go to Dashboard</Link>
           </Button>
         }
       />

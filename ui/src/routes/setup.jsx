@@ -25,7 +25,7 @@ export default function Setup() {
     return <div className="min-h-dvh bg-background" />;
   }
   if (!setupRequired && authenticated) {
-    return <Navigate to="/jobs" replace />;
+    return <Navigate to="/dashboard" replace />;
   }
   if (!setupRequired && !authenticated) {
     return <Navigate to="/login" replace />;
@@ -46,7 +46,7 @@ export default function Setup() {
     const res = await setup(password);
     setBusy(false);
     if (res.ok) {
-      navigate("/jobs", { replace: true });
+      navigate("/dashboard", { replace: true });
     } else {
       setError(authError(res, "Could not save the password."));
     }

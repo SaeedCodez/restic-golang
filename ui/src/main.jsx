@@ -9,6 +9,7 @@ import { ErrorBoundary } from "@/components/error-boundary";
 import { LiveProvider } from "@/lib/live";
 import { ThemeProvider } from "@/lib/theme";
 import { AuthProvider, useAuth } from "@/lib/auth";
+import Dashboard from "@/routes/dashboard";
 import Jobs from "@/routes/jobs";
 import JobDetail from "@/routes/job-detail";
 import Repositories from "@/routes/repositories";
@@ -55,7 +56,8 @@ const router = createHashRouter([
       </RequireAuth>
     ),
     children: [
-      { index: true, element: <Navigate to="/jobs" replace /> },
+      { index: true, element: <Navigate to="/dashboard" replace /> },
+      { path: "dashboard", element: <Dashboard /> },
       { path: "jobs", element: <Jobs /> },
       { path: "jobs/:id", element: <JobDetail /> },
       { path: "repositories", element: <Repositories /> },

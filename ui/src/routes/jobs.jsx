@@ -1,7 +1,7 @@
 import * as React from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { ArrowRight, FolderOpen, HardDrive, Play, Plus } from "lucide-react";
+import { ArrowRight, Play, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
@@ -45,8 +45,8 @@ function lastRunSummary(run) {
 }
 
 /**
- * JobCard is the unit of the home screen. It answers, at a glance: what does
- * this job back up, where to, and is it healthy?
+ * JobCard answers, at a glance: what does this job back up, where to, and is
+ * it healthy?
  *
  * A job that is running right now shows live progress inline — the card
  * subscribes to that run's stream (without replaying its log), so the number
@@ -290,82 +290,10 @@ function NewJobDialog({ open, onOpenChange, folders, repositories, onCreated }) 
   );
 }
 
-/** GettingStarted walks a brand-new install through the three things it needs. */
-function GettingStarted({ hasFolder, hasRepo, onNewJob }) {
-  const steps = [
-    {
-      done: hasFolder,
-      title: "Add a folder to back up",
-      body: "Name the directory you want protected, so you never retype the path.",
-      to: "/folders",
-      cta: "Add a folder",
-      icon: FolderOpen,
-    },
-    {
-      done: hasRepo,
-      title: "Add a storage repository",
-      body: "Where restic keeps the encrypted backups. A local directory works with no credentials.",
-      to: "/repositories",
-      cta: "Add a repository",
-      icon: HardDrive,
-    },
-    {
-      done: false,
-      title: "Create a job",
-      body: "Pair the two. The job is the thing you run and come back to.",
-      cta: "Create a job",
-      icon: Play,
-      action: onNewJob,
-      disabled: !hasFolder || !hasRepo,
-    },
-  ];
-
-  return (
-    <Card className="overflow-hidden">
-      <div className="border-b border-border px-5 py-4">
-        <h2 className="text-[15px] font-semibold tracking-tight">Get set up</h2>
-        <p className="mt-1 text-[13px] text-muted-foreground">
-          Three steps, once. After that, backing up is one click.
-        </p>
-      </div>
-      <ol className="divide-y divide-border">
-        {steps.map((step, i) => (
-          <li key={step.title} className="flex flex-wrap items-center gap-4 px-5 py-4">
-            <span
-              className={
-                step.done
-                  ? "grid size-7 shrink-0 place-items-center rounded-full bg-success/15 text-xs font-semibold text-success"
-                  : "grid size-7 shrink-0 place-items-center rounded-full bg-muted text-xs font-semibold text-muted-foreground"
-              }
-            >
-              {step.done ? "✓" : i + 1}
-            </span>
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium">{step.title}</p>
-              <p className="text-[13px] text-muted-foreground">{step.body}</p>
-            </div>
-            {step.done ? null : step.action ? (
-              <Button size="sm" onClick={step.action} disabled={step.disabled}>
-                {step.cta}
-              </Button>
-            ) : (
-              // `create` tells the destination screen to open its dialog on
-              // arrival, so the step is one click rather than two.
-              <Button size="sm" variant="outline" asChild>
-                <Link to={step.to} state={{ create: true }}>
-                  {step.cta}
-                </Link>
-              </Button>
-            )}
-          </li>
-        ))}
-      </ol>
-    </Card>
-  );
-}
-
 export default function JobsRoute() {
   const { runsVersion } = useLive();
+  const location = useLocation();
+  const navigate = useNavigate();
   const [dialogOpen, setDialogOpen] = React.useState(false);
 
   const loader = React.useCallback(async () => {
@@ -386,6 +314,15 @@ export default function JobsRoute() {
   React.useEffect(() => {
     if (runsVersion > 0) reload();
   }, [runsVersion, reload]);
+
+  // Open New job from GettingStarted (Dashboard) or other deep links.
+  // Effect + clear so same-route state.create works without a remount.
+  React.useEffect(() => {
+    if (location.state?.create) {
+      setDialogOpen(true);
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+  }, [location.state, location.pathname, navigate]);
 
   React.useEffect(() => {
     document.title = "Jobs · restic backup manager";
@@ -417,26 +354,27 @@ export default function JobsRoute() {
           <Skeleton className="h-24 w-full rounded-xl" />
         </div>
       ) : jobs.length === 0 ? (
-        <div className="space-y-4">
-          <GettingStarted
-            hasFolder={folders.length > 0}
-            hasRepo={repositories.length > 0}
-            onNewJob={() => setDialogOpen(true)}
-          />
-          {canCreate ? (
-            <EmptyState
-              icon={Play}
-              title="No jobs yet"
-              description="You have a folder and a repository — pair them into a job and you can back up in one click."
-              action={
-                <Button onClick={() => setDialogOpen(true)}>
-                  <Plus />
-                  Create a job
-                </Button>
-              }
-            />
-          ) : null}
-        </div>
+        <EmptyState
+          icon={Play}
+          title="No jobs yet"
+          description={
+            canCreate
+              ? "You have a folder and a repository — pair them into a job and you can back up in one click."
+              : "Finish setup on the Dashboard, then come back here to create a job."
+          }
+          action={
+            canCreate ? (
+              <Button onClick={() => setDialogOpen(true)}>
+                <Plus />
+                Create a job
+              </Button>
+            ) : (
+              <Button variant="outline" asChild>
+                <Link to="/dashboard">Finish setup on the Dashboard</Link>
+              </Button>
+            )
+          }
+        />
       ) : (
         <div className="space-y-3">
           {jobs.map((job) => (

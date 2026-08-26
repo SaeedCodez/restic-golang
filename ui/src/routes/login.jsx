@@ -22,7 +22,7 @@ export default function Login() {
     return <Navigate to="/setup" replace />;
   }
   if (authenticated) {
-    return <Navigate to="/jobs" replace />;
+    return <Navigate to="/dashboard" replace />;
   }
 
   const submit = async (e) => {
@@ -32,7 +32,7 @@ export default function Login() {
     const res = await login(password);
     setBusy(false);
     if (res.ok) {
-      navigate("/jobs", { replace: true });
+      navigate("/dashboard", { replace: true });
     } else {
       setError(authError(res, "Incorrect password."));
       setPassword("");
