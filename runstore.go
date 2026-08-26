@@ -170,6 +170,66 @@ func (s *RunStore) statsForJob(jobID string) runStats {
 	return s.statsByJob()[jobID]
 }
 
+// backupTiming returns cadence/health inputs for the scheduler and job views:
+// the FinishedAt of the latest terminal backup (and whether it succeeded), plus
+// the FinishedAt of the latest successful backup. Times are UTC copies.
+func (s *RunStore) backupTiming(jobID string) (lastAttempt *time.Time, lastOK bool, lastSuccess *time.Time) {
+	if jobID == "" {
+		return nil, false, nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var bestAttempt, bestSuccess *Run
+	for _, run := range s.index {
+		if run.JobID != jobID || run.Kind != KindBackup || !run.Status.Terminal() {
+			continue
+		}
+		if bestAttempt == nil || newerFinished(run, bestAttempt) {
+			bestAttempt = run
+		}
+		if run.Status == StatusSuccess || run.Status == StatusSuccessWarnings {
+			if bestSuccess == nil || newerFinished(run, bestSuccess) {
+				bestSuccess = run
+			}
+		}
+	}
+	if bestAttempt != nil {
+		t := bestAttempt.FinishedAt
+		if t == nil {
+			t = &bestAttempt.StartedAt
+		}
+		cp := t.UTC()
+		lastAttempt = &cp
+		lastOK = bestAttempt.Status == StatusSuccess || bestAttempt.Status == StatusSuccessWarnings
+	}
+	if bestSuccess != nil {
+		t := bestSuccess.FinishedAt
+		if t == nil {
+			t = &bestSuccess.StartedAt
+		}
+		cp := t.UTC()
+		lastSuccess = &cp
+	}
+	return lastAttempt, lastOK, lastSuccess
+}
+
+// newerFinished prefers FinishedAt, falling back to StartedAt, then id.
+func newerFinished(a, b *Run) bool {
+	at := a.StartedAt
+	if a.FinishedAt != nil {
+		at = *a.FinishedAt
+	}
+	bt := b.StartedAt
+	if b.FinishedAt != nil {
+		bt = *b.FinishedAt
+	}
+	if at.Equal(bt) {
+		return a.ID > b.ID
+	}
+	return at.After(bt)
+}
+
 // runsForJob returns a job's run history, newest first.
 func (s *RunStore) runsForJob(jobID string) []*Run {
 	return s.list(func(r *Run) bool { return r.JobID == jobID })

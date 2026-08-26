@@ -35,11 +35,13 @@ export function fmtRelative(iso) {
   if (isNaN(d.getTime())) return String(iso);
   const diff = (Date.now() - d.getTime()) / 1000;
   const abs = Math.abs(diff);
-  if (abs < 10) return "just now";
-  if (abs < 60) return Math.round(abs) + "s ago";
-  if (abs < 3600) return Math.round(abs / 60) + "m ago";
-  if (abs < 86400) return Math.round(abs / 3600) + "h ago";
-  if (abs < 7 * 86400) return Math.round(abs / 86400) + "d ago";
+  const suffix = diff >= 0 ? " ago" : "";
+  const prefix = diff < 0 ? "in " : "";
+  if (abs < 10) return diff < 0 ? "soon" : "just now";
+  if (abs < 60) return prefix + Math.round(abs) + "s" + suffix;
+  if (abs < 3600) return prefix + Math.round(abs / 60) + "m" + suffix;
+  if (abs < 86400) return prefix + Math.round(abs / 3600) + "h" + suffix;
+  if (abs < 7 * 86400) return prefix + Math.round(abs / 86400) + "d" + suffix;
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 

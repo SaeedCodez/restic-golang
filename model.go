@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -149,12 +150,48 @@ func (f *Folder) Validate() error {
 
 // ---- Job -------------------------------------------------------------------
 
+// ScheduleKind is how often an automatic backup fires.
+const (
+	ScheduleHourly = "hourly"
+	ScheduleEvery  = "every"
+	ScheduleDaily  = "daily"
+	ScheduleWeekly = "weekly"
+)
+
+// ScheduleState is a derived label for a job's automatic-backup health,
+// computed for the API — never persisted.
+const (
+	ScheduleStateOff       = "off"
+	ScheduleStateScheduled = "scheduled"
+	ScheduleStateRunning   = "running"
+	ScheduleStateOverdue   = "overdue"
+)
+
+// Trigger values record why a backup Run started (stored on Run.Params["trigger"]).
+const (
+	TriggerManual   = "manual"
+	TriggerSchedule = "schedule"
+)
+
+// JobSchedule is an optional automatic-backup cadence attached to a Job.
+// Missing/nil means the job is manual-only. Time-of-day fields use the
+// machine's local zone.
+type JobSchedule struct {
+	Enabled  bool   `json:"enabled"`
+	Kind     string `json:"kind"`               // hourly | every | daily | weekly
+	Every    string `json:"every,omitempty"`    // Kind=="every": Go duration, e.g. "6h"
+	At       string `json:"at,omitempty"`       // "HH:MM" local time for daily/weekly
+	Weekdays []int  `json:"weekdays,omitempty"` // 0=Sunday … 6=Saturday for weekly
+}
+
 // Job is the core concept: a saved, named pairing of one Folder and one
-// Repository. It is the thing the user runs, views and returns to.
+// Repository. It is the thing the user runs, views and returns to. An optional
+// Schedule makes the same job fire automatically while the process is running.
 type Job struct {
 	Meta
-	FolderID     string `json:"folderId"`
-	RepositoryID string `json:"repositoryId"`
+	FolderID     string       `json:"folderId"`
+	RepositoryID string       `json:"repositoryId"`
+	Schedule     *JobSchedule `json:"schedule,omitempty"`
 }
 
 // ResticTag is the immutable per-job restic tag stamped on every snapshot this
@@ -163,7 +200,8 @@ type Job struct {
 // the job's immutable id, so it is stable across renames without being stored.
 func (j *Job) ResticTag() string { return "resticweb-job:" + j.ID }
 
-// Validate checks that the job names a folder and a repository.
+// Validate checks that the job names a folder and a repository, and that any
+// attached schedule is well-formed.
 func (j *Job) Validate() error {
 	if strings.TrimSpace(j.Name) == "" {
 		return errors.New("a job name is required")
@@ -174,7 +212,119 @@ func (j *Job) Validate() error {
 	if strings.TrimSpace(j.RepositoryID) == "" {
 		return errors.New("please choose a storage repository for this job")
 	}
+	if j.Schedule != nil {
+		if err := j.Schedule.Validate(); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// Validate checks that a schedule's kind and fields are usable.
+func (s *JobSchedule) Validate() error {
+	if s == nil {
+		return nil
+	}
+	switch s.Kind {
+	case ScheduleHourly:
+		// no extra fields
+	case ScheduleEvery:
+		d, err := time.ParseDuration(strings.TrimSpace(s.Every))
+		if err != nil || d < time.Hour {
+			return errors.New(`"every" schedules need a duration of at least 1h (e.g. "6h")`)
+		}
+	case ScheduleDaily:
+		if _, _, err := parseClock(s.At); err != nil {
+			return err
+		}
+	case ScheduleWeekly:
+		if _, _, err := parseClock(s.At); err != nil {
+			return err
+		}
+		if len(s.Weekdays) == 0 {
+			return errors.New("please choose at least one weekday for a weekly schedule")
+		}
+		seen := map[int]bool{}
+		for _, d := range s.Weekdays {
+			if d < 0 || d > 6 {
+				return errors.New("weekdays must be between 0 (Sunday) and 6 (Saturday)")
+			}
+			if seen[d] {
+				continue
+			}
+			seen[d] = true
+		}
+		// Normalize to a sorted unique list so storage is stable.
+		out := make([]int, 0, len(seen))
+		for d := 0; d <= 6; d++ {
+			if seen[d] {
+				out = append(out, d)
+			}
+		}
+		s.Weekdays = out
+	case "":
+		return errors.New("a schedule kind is required (hourly, every, daily, or weekly)")
+	default:
+		return errors.New(`schedule kind must be "hourly", "every", "daily", or "weekly"`)
+	}
+	return nil
+}
+
+// parseClock parses "HH:MM" or "HH:MM:SS" (24h) into hour and minute.
+func parseClock(at string) (hour, min int, err error) {
+	at = strings.TrimSpace(at)
+	if at == "" {
+		return 0, 0, errors.New(`please set a time of day as "HH:MM" (e.g. "02:00")`)
+	}
+	parts := strings.Split(at, ":")
+	if len(parts) != 2 && len(parts) != 3 {
+		return 0, 0, errors.New(`time of day must look like "HH:MM" (e.g. "02:00")`)
+	}
+	h, errH := parseIntRange(parts[0], 0, 23)
+	m, errM := parseIntRange(parts[1], 0, 59)
+	if errH != nil || errM != nil {
+		return 0, 0, errors.New(`time of day must look like "HH:MM" (e.g. "02:00")`)
+	}
+	if len(parts) == 3 {
+		if _, errS := parseIntRange(parts[2], 0, 59); errS != nil {
+			return 0, 0, errors.New(`time of day must look like "HH:MM" (e.g. "02:00")`)
+		}
+	}
+	return h, m, nil
+}
+
+func parseIntRange(s string, lo, hi int) (int, error) {
+	n, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil || n < lo || n > hi {
+		return 0, errors.New("out of range")
+	}
+	return n, nil
+}
+
+// Describe returns a short human label for the schedule, e.g. "daily at 02:00".
+func (s *JobSchedule) Describe() string {
+	if s == nil {
+		return ""
+	}
+	switch s.Kind {
+	case ScheduleHourly:
+		return "hourly"
+	case ScheduleEvery:
+		return "every " + strings.TrimSpace(s.Every)
+	case ScheduleDaily:
+		return "daily at " + strings.TrimSpace(s.At)
+	case ScheduleWeekly:
+		names := []string{"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"}
+		parts := make([]string, 0, len(s.Weekdays))
+		for _, d := range s.Weekdays {
+			if d >= 0 && d < len(names) {
+				parts = append(parts, names[d])
+			}
+		}
+		return "weekly on " + strings.Join(parts, ", ") + " at " + strings.TrimSpace(s.At)
+	default:
+		return s.Kind
+	}
 }
 
 // ---- Run -------------------------------------------------------------------

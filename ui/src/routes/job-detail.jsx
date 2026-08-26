@@ -7,6 +7,7 @@ import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Breadcrumb, Mono, Page, PageHeader } from "@/components/page";
 import { RunHistory } from "@/components/run-history";
+import { ScheduleEditor } from "@/components/schedule-editor";
 import { SnapshotsPanel } from "@/components/snapshots-panel";
 import { StatusBadge } from "@/components/status-badge";
 import { useConfirm } from "@/components/confirm";
@@ -130,6 +131,8 @@ export default function JobDetail() {
       />
 
       <div className="space-y-4">
+        <ScheduleEditor job={job} onSaved={() => reload()} />
+
         <Card>
           <CardHeader>
             <CardTitle>

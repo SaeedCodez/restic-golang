@@ -164,6 +164,46 @@ func TestJobViewCarriesLastRun(t *testing.T) {
 	}
 }
 
+func TestJobScheduleInView(t *testing.T) {
+	fake := &fakeRunner{installed: true}
+	app := newRunTestApp(t, fake)
+	h := newServer(app).routes(http.NotFoundHandler())
+	_, jobID := makeJob(t, app, "sched-view", "/data")
+
+	job, _ := app.jobs.Get(jobID)
+	job.Schedule = &JobSchedule{Enabled: true, Kind: ScheduleDaily, At: "02:00"}
+	if _, err := app.jobs.Update(jobID, job); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	var one struct {
+		Job jobView `json:"job"`
+	}
+	if code := doJSON(t, h, "GET", "/api/jobs/"+jobID, nil, &one); code != http.StatusOK {
+		t.Fatalf("get job: %d", code)
+	}
+	if one.Job.Schedule == nil || !one.Job.Schedule.Enabled || one.Job.Schedule.Kind != ScheduleDaily {
+		t.Fatalf("schedule missing on view: %+v", one.Job.Schedule)
+	}
+	if one.Job.ScheduleState != ScheduleStateScheduled {
+		t.Fatalf("scheduleState = %q, want scheduled", one.Job.ScheduleState)
+	}
+	if one.Job.NextDueAt == nil {
+		t.Fatal("nextDueAt should be set for an enabled daily schedule")
+	}
+
+	// Manual run stamps trigger=manual.
+	run, err := app.coord.StartBackup(jobID)
+	if err != nil {
+		t.Fatalf("StartBackup: %v", err)
+	}
+	waitForStatus(t, app.runs, run.ID, StatusSuccess, 2*time.Second)
+	got, _ := app.runs.Get(run.ID)
+	if got.Params["trigger"] != TriggerManual {
+		t.Fatalf("trigger = %q, want manual", got.Params["trigger"])
+	}
+}
+
 // ---- run list filters ------------------------------------------------------
 
 func TestRunListFiltersAndLimit(t *testing.T) {

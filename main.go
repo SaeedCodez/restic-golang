@@ -47,6 +47,11 @@ func main() {
 	// and orphaned restic children are reaped.
 	app.Reconcile()
 
+	// Start the automatic-backup scheduler after reconcile so interrupted runs
+	// are settled before any scheduled backup is considered.
+	app.sched.Start()
+	defer app.sched.Stop()
+
 	srv := newServer(app)
 
 	httpServer := &http.Server{

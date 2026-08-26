@@ -78,9 +78,17 @@ func newCoordinator(app *App, store *RunStore, runner Runner, bus eventBus) *Coo
 	return &Coordinator{app: app, store: store, runner: runner, bus: bus, active: map[string]*activeRun{}}
 }
 
-// StartBackup starts a backup run for a job. It resolves the job's folder and
-// repository, then dispatches a tagged restic backup.
+// StartBackup starts a manually triggered backup run for a job.
 func (c *Coordinator) StartBackup(jobID string) (*Run, error) {
+	return c.StartBackupTriggered(jobID, TriggerManual)
+}
+
+// StartBackupTriggered starts a backup run for a job with an explicit trigger
+// ("manual" or "schedule"), recorded on the run and in its first log line.
+func (c *Coordinator) StartBackupTriggered(jobID, trigger string) (*Run, error) {
+	if trigger == "" {
+		trigger = TriggerManual
+	}
 	job, folder, repo, err := c.app.resolveJob(jobID)
 	if err != nil {
 		return nil, err
@@ -93,11 +101,26 @@ func (c *Coordinator) StartBackup(jobID string) (*Run, error) {
 		JobName:      job.Name,
 		FolderPath:   folder.Path,
 		RepoName:     repo.Name,
-		Params:       map[string]string{"source": folder.Path, "tag": job.ResticTag()},
+		Params: map[string]string{
+			"source":  folder.Path,
+			"tag":     job.ResticTag(),
+			"trigger": trigger,
+		},
 	}
 	tag := job.ResticTag()
 	src := folder.Path
+	schedDesc := ""
+	if trigger == TriggerSchedule && job.Schedule != nil {
+		schedDesc = job.Schedule.Describe()
+	}
 	return c.startRun(repo, run, func(ctx context.Context, h *runHandle) (int, error) {
+		if trigger == TriggerSchedule {
+			if schedDesc != "" {
+				h.Log("info", "system", "Started by schedule ("+schedDesc+").")
+			} else {
+				h.Log("info", "system", "Started by schedule.")
+			}
+		}
 		h.Log("info", "system", fmt.Sprintf("Backing up %s to repository %q", src, repo.Name))
 		code, err := c.runner.Backup(ctx, &repo, src, []string{tag}, h)
 

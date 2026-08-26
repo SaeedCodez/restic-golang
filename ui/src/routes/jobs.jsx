@@ -31,7 +31,9 @@ import { useFetch } from "@/lib/use-fetch";
 import { useLive, useRunStream } from "@/lib/live";
 import { fmtBytes, fmtRelative } from "@/lib/format";
 import { displayPercent, isActive } from "@/lib/runs";
+import { describeScheduleTitle } from "@/lib/schedule";
 import { handleStartResponse } from "@/lib/start-run";
+import { cn } from "@/lib/utils";
 
 /** What the last run stored, in one short phrase. */
 function lastRunSummary(run) {
@@ -92,7 +94,7 @@ function JobCard({ job, onRan }) {
           </div>
 
           <div className="mt-1.5 flex items-center gap-2 font-mono text-xs text-muted-foreground">
-            <span className="min-w-0 flex-1 truncate" title={job.folderPath}>
+            <span className="max-w-fit flex-1 truncate" title={job.folderPath}>
               {job.folderPath || job.folderName || "?"}
             </span>
             <ArrowRight className="size-3 shrink-0 opacity-60" />
@@ -109,6 +111,21 @@ function JobCard({ job, onRan }) {
                   <span className={last.error ? "text-destructive" : undefined}>{summary}</span>
                 </>
               ) : null}
+            </p>
+          ) : null}
+
+          {job.schedule?.enabled ? (
+            <p
+              className={cn(
+                "mt-1.5 text-[13px]",
+                job.scheduleState === "overdue" ? "text-warning" : "text-muted-foreground",
+              )}
+            >
+              {job.scheduleState === "overdue"
+                ? `Overdue · ${describeScheduleTitle(job.schedule)}`
+                : job.nextDueAt
+                  ? `${describeScheduleTitle(job.schedule)} · next ${fmtRelative(job.nextDueAt)}`
+                  : describeScheduleTitle(job.schedule)}
             </p>
           ) : null}
         </div>
@@ -149,6 +166,7 @@ function NewJobDialog({ open, onOpenChange, folders, repositories, onCreated }) 
   const [name, setName] = React.useState("");
   const [folderId, setFolderId] = React.useState("");
   const [repositoryId, setRepositoryId] = React.useState("");
+  const [autoDaily, setAutoDaily] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState("");
 
@@ -156,6 +174,7 @@ function NewJobDialog({ open, onOpenChange, folders, repositories, onCreated }) 
     if (!open) return;
     setName("");
     setError("");
+    setAutoDaily(false);
     setFolderId(folders[0]?.id || "");
     setRepositoryId(repositories[0]?.id || "");
   }, [open, folders, repositories]);
@@ -163,7 +182,11 @@ function NewJobDialog({ open, onOpenChange, folders, repositories, onCreated }) 
   const submit = async (e) => {
     e.preventDefault();
     setBusy(true);
-    const res = await Jobs.create({ name: name.trim(), folderId, repositoryId });
+    const body = { name: name.trim(), folderId, repositoryId };
+    if (autoDaily) {
+      body.schedule = { enabled: true, kind: "daily", at: "02:00" };
+    }
+    const res = await Jobs.create(body);
     setBusy(false);
     if (res.ok) {
       toast.success(`Job “${res.body.job.name}” created.`);
@@ -229,6 +252,22 @@ function NewJobDialog({ open, onOpenChange, folders, repositories, onCreated }) 
                 </SelectContent>
               </Select>
             </div>
+
+            <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border px-3 py-2.5">
+              <input
+                type="checkbox"
+                className="mt-0.5 size-4 accent-foreground"
+                checked={autoDaily}
+                onChange={(e) => setAutoDaily(e.target.checked)}
+              />
+              <span>
+                <span className="block text-sm font-medium">Also run automatically</span>
+                <span className="block text-[13px] text-muted-foreground">
+                  Daily at 02:00 while the app is running. You can change this later on the job
+                  page.
+                </span>
+              </span>
+            </label>
 
             {error ? (
               <p className="rounded-md bg-destructive/10 px-3 py-2 text-[13px] text-destructive">

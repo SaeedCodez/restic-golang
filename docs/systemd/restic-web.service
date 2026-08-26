@@ -1,0 +1,18 @@
+[Unit]
+Description=restic backup manager (web UI + scheduler)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Change these three lines for your install.
+User=YOUR_USER
+WorkingDirectory=/var/lib/restic-web
+ExecStart=/usr/local/bin/restic-web -addr 127.0.0.1:8080 -data /var/lib/restic-web/data
+Restart=on-failure
+RestartSec=5
+# Keep secrets readable only by this user.
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

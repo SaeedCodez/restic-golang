@@ -24,6 +24,7 @@ type App struct {
 	bus    eventBus
 	bcast  *broadcaster
 	coord  *Coordinator
+	sched  *Scheduler
 }
 
 // newApp builds an App backed by the real restic runner.
@@ -60,6 +61,7 @@ func newAppWithRunner(dataDir string, runner Runner) (*App, error) {
 
 	app := &App{dataDir: dataDir, repos: repos, folders: folders, jobs: jobs, runs: runs, runner: runner, bus: bus, bcast: bcast}
 	app.coord = newCoordinator(app, runs, runner, bus)
+	app.sched = newScheduler(app)
 	return app, nil
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // This file holds the CRUD HTTP handlers for the three user-managed entities:
@@ -215,21 +216,24 @@ func (s *Server) handleFolderDelete(w http.ResponseWriter, r *http.Request) {
 
 // jobView is a job enriched with its folder/repository display fields, its
 // derived restic tag and its latest run, so the jobs screen can answer "is this
-// healthy, and when did it last work?" without a request per job.
+// healthy, and when did it last work?" without a request per job. Schedule
+// health fields are derived (never persisted).
 type jobView struct {
 	Job
-	FolderName string `json:"folderName"`
-	FolderPath string `json:"folderPath"`
-	RepoName   string `json:"repoName"`
-	Tag        string `json:"tag"`
-	LastRun    *Run   `json:"lastRun,omitempty"`
-	RunCount   int    `json:"runCount"`
+	FolderName    string     `json:"folderName"`
+	FolderPath    string     `json:"folderPath"`
+	RepoName      string     `json:"repoName"`
+	Tag           string     `json:"tag"`
+	LastRun       *Run       `json:"lastRun,omitempty"`
+	RunCount      int        `json:"runCount"`
+	NextDueAt     *time.Time `json:"nextDueAt,omitempty"`
+	ScheduleState string     `json:"scheduleState"`
 }
 
 // viewWith builds a job view from already-computed run stats, so a list can
 // summarize every job's history in a single pass over the runs.
-func (s *Server) viewWith(job Job, st runStats) jobView {
-	v := jobView{Job: job, Tag: job.ResticTag(), LastRun: st.Last, RunCount: st.Count}
+func (s *Server) viewWith(job Job, st runStats, backupRunning bool) jobView {
+	v := jobView{Job: job, Tag: job.ResticTag(), LastRun: st.Last, RunCount: st.Count, ScheduleState: ScheduleStateOff}
 	if f, ok := s.app.folders.Get(job.FolderID); ok {
 		v.FolderName = f.Name
 		v.FolderPath = f.Path
@@ -237,19 +241,46 @@ func (s *Server) viewWith(job Job, st runStats) jobView {
 	if repo, ok := s.app.repos.Get(job.RepositoryID); ok {
 		v.RepoName = repo.Name
 	}
+	s.attachScheduleView(&v, job, backupRunning)
 	return v
 }
 
+// attachScheduleView fills nextDueAt and scheduleState from the job's schedule
+// and backup history.
+func (s *Server) attachScheduleView(v *jobView, job Job, backupRunning bool) {
+	if job.Schedule == nil || !job.Schedule.Enabled {
+		v.ScheduleState = ScheduleStateOff
+		return
+	}
+	now := time.Now()
+	lastAttempt, lastOK, lastSuccess := s.app.runs.backupTiming(job.ID)
+	v.NextDueAt = nextDueAt(job.Schedule, lastAttempt, lastOK, now)
+	v.ScheduleState = deriveScheduleState(job.Schedule, lastAttempt, lastOK, lastSuccess, backupRunning, now)
+}
+
 func (s *Server) viewOf(job Job) jobView {
-	return s.viewWith(job, s.app.runs.statsForJob(job.ID))
+	running := false
+	for _, run := range s.app.runs.activeRuns() {
+		if run.JobID == job.ID && run.Kind == KindBackup {
+			running = true
+			break
+		}
+	}
+	return s.viewWith(job, s.app.runs.statsForJob(job.ID), running)
 }
 
 func (s *Server) handleJobList(w http.ResponseWriter, r *http.Request) {
 	jobs := s.app.jobs.List()
 	stats := s.app.runs.statsByJob()
+	activeBackup := map[string]bool{}
+	for _, run := range s.app.runs.activeRuns() {
+		if run.Kind == KindBackup && run.JobID != "" {
+			activeBackup[run.JobID] = true
+		}
+	}
 	views := make([]jobView, 0, len(jobs))
 	for _, j := range jobs {
-		views = append(views, s.viewWith(j, stats[j.ID]))
+		views = append(views, s.viewWith(j, stats[j.ID], activeBackup[j.ID]))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "jobs": views})
 }

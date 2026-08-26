@@ -105,7 +105,10 @@ See [Working on the UI](#working-on-the-ui).
 4. **Run backup**. The repository is created and initialized on the first backup,
    so there is no separate setup step. Watch the live run; its history and
    snapshots appear on the job page.
-5. Change a file and run again to see an incremental backup (mostly *unchanged*,
+5. Optionally enable **Automatic backup** on the job page (hourly, every N hours,
+   daily, or weekly). Keep the process running — see
+   [Running as a service](#running-as-a-service).
+6. Change a file and run again to see an incremental backup (mostly *unchanged*,
    only a little *data added*).
 
 A brand-new install walks you through steps 1–3 on the jobs screen rather than
@@ -155,16 +158,23 @@ data/
 - **Job ↔ snapshot** association is a stable per-job restic tag
   (`resticweb-job:<id>`), so a job's snapshots are discoverable from the
   repository itself.
+- **Automatic backups.** A job may carry an optional schedule (hourly, every N
+  hours, daily, or weekly). An in-process scheduler polls the wall clock and
+  starts the same backup path as a manual run (`params.trigger=schedule`).
+  Missed slots catch up once after downtime; a busy repository is skipped and
+  retried on the next tick. The process must stay running for schedules to fire —
+  see [Running as a service](#running-as-a-service).
 
 ### Code layout
 
 ```
 main.go            entry point: flags, embedded UI, startup reconcile, HTTP server
-model.go           domain types: Repository, Folder, Job, Run, LogLine
+model.go           domain types: Repository, Folder, Job, JobSchedule, Run, LogLine
 store.go           generic entity file store (atomic, fsync'd) + typed errors
 app.go             dependency container + legacy config import
 runstore.go        durable run records + append-only logs + reconcile + retention
 coordinator.go     per-repository locking; drives every run kind
+scheduler.go       automatic-backup poller (wall-clock due / catch-up / busy skip)
 runner.go          Runner interface + real restic runner (streaming) + exit codes
 restic.go          stateless restic helpers (message/snapshot parsing, classification)
 broadcaster.go     history-free SSE fan-out (the event bus)
@@ -183,7 +193,7 @@ The UI talks to a plain JSON API, which is usable on its own:
 
 | Endpoint | Notes |
 | --- | --- |
-| `GET /api/jobs` | each job carries its `lastRun` and `runCount`, so a list needs one request |
+| `GET /api/jobs` | each job carries its `lastRun`, `runCount`, and schedule health (`nextDueAt`, `scheduleState`) |
 | `POST /api/jobs/{id}/run` | `202` with the new run id, or `409` `busy` naming the blocking run |
 | `GET /api/runs` | filter with `status` (`active`/`finished`/an exact status), `kind`, `jobId`, `limit`; `total` reports the match count before the limit |
 | `GET /api/runs/{id}/log` | the durable log, `?after=<seq>` for incremental reads |
@@ -249,10 +259,36 @@ stored choice is applied before first paint, so the page never flashes.
   browser: the API reports only whether a secret is set, and an edit that leaves
   a secret field blank keeps the stored value.
 - Retention keeps the newest 100 runs per job on startup; download workspaces are
-  ephemeral and wiped on startup.
+  ephemeral and wiped on startup. Snapshot retention (`forget` / `prune`) is not
+  built in yet — automatic backups will grow the repository until you prune
+  outside the app or that lands as a follow-up.
 - A browser cannot hand the server a real local path, so source and target
   folders are entered as absolute-path text fields. A mistyped path surfaces as a
   failed run rather than as validation.
 - restic must be the sole writer per repository for the stale-lock handling to be
   safe.
-- There is no scheduler: jobs run when you run them.
+- Scheduled backups only fire while this process is running. Closing the browser
+  is fine; quitting the binary is not.
+
+## Running as a service
+
+For automatic backups to fire overnight, keep `restic-web` running under the OS
+service manager. Sample units live in `docs/systemd/` and `docs/launchd/` —
+copy, edit the binary and data paths, then enable them.
+
+**systemd (Linux):**
+
+```sh
+sudo cp docs/systemd/restic-web.service /etc/systemd/system/
+# edit User=, ExecStart=, and WorkingDirectory=
+sudo systemctl daemon-reload
+sudo systemctl enable --now restic-web
+```
+
+**launchd (macOS):**
+
+```sh
+cp docs/launchd/com.resticweb.app.plist ~/Library/LaunchAgents/
+# edit the ProgramArguments paths inside the plist
+launchctl load ~/Library/LaunchAgents/com.resticweb.app.plist
+```
