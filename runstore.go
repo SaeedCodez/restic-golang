@@ -1,120 +1,167 @@
 package main
 
 import (
-	"bufio"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
-	"os"
-	"path/filepath"
-	"sort"
+	"strconv"
 	"sync"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // progressFlushInterval bounds how often a running operation's throttled progress
-// is written to run.json. Live progress streams every tick; the durable snapshot
+// is written to Postgres. Live progress streams every tick; the durable snapshot
 // only needs to be recent enough that a page loaded mid-run shows a sensible bar.
 const progressFlushInterval = time.Second
 
-// maxRunsPerJob caps how many runs are retained per job (and per jobless kind),
-// bounding disk use and the startup scan. Generous, since a run record is tiny.
-const maxRunsPerJob = 100
+const runCols = `id, kind, status, job_id, repository_id, job_name, folder_path, repo_name,
+	params, started_at, finished_at, pid, pid_start, progress, summary, exit_code, error`
 
-// RunStore owns the on-disk runs tree:
+// RunStore owns durable run records and append-only logs in Postgres.
 //
-//	<dir>/<runId>/run.json    the full, authoritative run record (atomic writes)
-//	<dir>/<runId>/log.jsonl   the append-only, permanent log (one LogLine per line)
-//
-// The in-memory index mirrors run.json so "is anything running" and history
-// listings are cheap reads. The durable record is the sole source of truth for a
-// run's state; a runHandle streams a live operation's events into it.
+// live holds in-process copies of runs that currently have a handle (or were
+// recently mutated) so Get/list see unflushed progress. The table is the source
+// of truth across restarts.
 type RunStore struct {
-	dir string
-	bus eventBus
+	pool *pgxpool.Pool
+	bus  eventBus
 
-	mu    sync.RWMutex
-	index map[string]*Run
+	mu   sync.RWMutex
+	live map[string]*Run
 }
 
-// newRunStore opens (creating if needed) the runs directory and loads the index.
-func newRunStore(dir string, bus eventBus) (*RunStore, error) {
+func newRunStore(pool *pgxpool.Pool, bus eventBus) *RunStore {
 	if bus == nil {
 		bus = noopBus{}
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, err
-	}
-	s := &RunStore{dir: dir, bus: bus, index: map[string]*Run{}}
-	if err := s.load(); err != nil {
-		return nil, err
-	}
-	return s, nil
+	return &RunStore{pool: pool, bus: bus, live: map[string]*Run{}}
 }
 
-func (s *RunStore) runDir(id string) string  { return filepath.Join(s.dir, id) }
-func (s *RunStore) runPath(id string) string { return filepath.Join(s.dir, id, "run.json") }
-func (s *RunStore) logPath(id string) string { return filepath.Join(s.dir, id, "log.jsonl") }
-
-// load reads every run.json under dir into the index. Unreadable entries are
-// skipped so one corrupt run never blocks startup.
-func (s *RunStore) load() error {
-	entries, err := os.ReadDir(s.dir)
-	if err != nil {
-		return err
-	}
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		data, err := os.ReadFile(s.runPath(e.Name()))
-		if err != nil {
-			continue
-		}
-		var run Run
-		if err := json.Unmarshal(data, &run); err != nil {
-			continue
-		}
-		if run.ID == "" {
-			run.ID = e.Name()
-		}
-		s.index[run.ID] = &run
-	}
-	return nil
-}
-
-// newRunID returns a time-sortable run id, so a lexical directory listing is
-// already in chronological order.
+// newRunID returns a time-sortable run id, so a lexical listing is already in
+// chronological order.
 func newRunID(now time.Time) string {
 	var b [4]byte
 	_, _ = rand.Read(b[:])
 	return now.UTC().Format("20060102T150405.000000000") + "-" + hex.EncodeToString(b[:])
 }
 
-// Get returns a deep copy of the run with the given id.
 func (s *RunStore) Get(id string) (*Run, bool) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-	run, ok := s.index[id]
-	if !ok {
+	if run, ok := s.live[id]; ok {
+		cp := run.clone()
+		s.mu.RUnlock()
+		return cp, true
+	}
+	s.mu.RUnlock()
+	return s.getDB(id)
+}
+
+func (s *RunStore) getDB(id string) (*Run, bool) {
+	ctx, cancel := dbCtx()
+	defer cancel()
+	run, err := scanRun(s.pool.QueryRow(ctx, `SELECT `+runCols+` FROM runs WHERE id = $1`, id))
+	if err != nil {
 		return nil, false
 	}
-	return run.clone(), true
+	return run, true
 }
 
 // list returns clones of all runs matching keep, newest first.
 func (s *RunStore) list(keep func(*Run) bool) []*Run {
-	s.mu.RLock()
-	out := make([]*Run, 0, len(s.index))
-	for _, run := range s.index {
-		if keep == nil || keep(run) {
-			out = append(out, run.clone())
+	runs, _ := s.query("", "", "", 0)
+	if keep == nil {
+		return runs
+	}
+	out := make([]*Run, 0, len(runs))
+	for _, run := range runs {
+		if keep(run) {
+			out = append(out, run)
 		}
 	}
-	s.mu.RUnlock()
+	return out
+}
 
-	sort.Slice(out, func(i, j int) bool { return newerRun(out[i], out[j]) })
+// query returns runs matching optional status/kind/jobId filters, newest first.
+// total is the match count before limit (0 limit means no cap).
+func (s *RunStore) query(status, kind, jobID string, limit int) ([]*Run, int) {
+	where, args := runWhere(status, kind, jobID)
+	ctx, cancel := dbCtx()
+	defer cancel()
+
+	var total int
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM runs`+where, args...).Scan(&total); err != nil {
+		return nil, 0
+	}
+
+	q := `SELECT ` + runCols + ` FROM runs` + where + ` ORDER BY started_at DESC, id DESC`
+	if limit > 0 {
+		args = append(args, limit)
+		q += ` LIMIT $` + strconv.Itoa(len(args))
+	}
+	rows, err := s.pool.Query(ctx, q, args...)
+	if err != nil {
+		return nil, total
+	}
+	defer rows.Close()
+	var out []*Run
+	for rows.Next() {
+		run, err := scanRun(rows)
+		if err != nil {
+			return overlayRuns(s, out), total
+		}
+		out = append(out, run)
+	}
+	return overlayRuns(s, out), total
+}
+
+func runWhere(status, kind, jobID string) (string, []any) {
+	var clauses []string
+	var args []any
+	add := func(sql string, v any) {
+		args = append(args, v)
+		clauses = append(clauses, sql+"$"+strconv.Itoa(len(args)))
+	}
+	switch status {
+	case "", "all":
+	case "active":
+		clauses = append(clauses, `status IN ('starting','running')`)
+	case "finished":
+		clauses = append(clauses, `status IN ('success','success_warnings','failed','canceled','interrupted')`)
+	default:
+		add(`status = `, status)
+	}
+	if kind != "" {
+		add(`kind = `, kind)
+	}
+	if jobID != "" {
+		add(`job_id = `, jobID)
+	}
+	if len(clauses) == 0 {
+		return "", args
+	}
+	w := " WHERE " + clauses[0]
+	for i := 1; i < len(clauses); i++ {
+		w += " AND " + clauses[i]
+	}
+	return w, args
+}
+
+func overlayRuns(s *RunStore, runs []*Run) []*Run {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.live) == 0 {
+		return runs
+	}
+	out := make([]*Run, len(runs))
+	for i, r := range runs {
+		if live, ok := s.live[r.ID]; ok {
+			out[i] = live.clone()
+		} else {
+			out[i] = r
+		}
+	}
 	return out
 }
 
@@ -134,79 +181,107 @@ type runStats struct {
 	Count int
 }
 
-// statsByJob summarizes every job's history in one pass, so listing jobs with
-// their last run stays O(runs) instead of O(jobs × runs).
 func (s *RunStore) statsByJob() map[string]runStats {
-	s.mu.RLock()
-	out := make(map[string]runStats)
-	for _, run := range s.index {
-		if run.JobID == "" {
-			continue
+	ctx, cancel := dbCtx()
+	defer cancel()
+	out := map[string]runStats{}
+
+	rows, err := s.pool.Query(ctx, `SELECT job_id, COUNT(*) FROM runs WHERE job_id IS NOT NULL AND job_id <> '' GROUP BY job_id`)
+	if err != nil {
+		return out
+	}
+	for rows.Next() {
+		var jobID string
+		var n int
+		if err := rows.Scan(&jobID, &n); err != nil {
+			rows.Close()
+			return out
+		}
+		out[jobID] = runStats{Count: n}
+	}
+	rows.Close()
+
+	rows, err = s.pool.Query(ctx, `SELECT DISTINCT ON (job_id) `+runCols+`
+		FROM runs WHERE job_id IS NOT NULL AND job_id <> ''
+		ORDER BY job_id, started_at DESC, id DESC`)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		run, err := scanRun(rows)
+		if err != nil {
+			return out
 		}
 		st := out[run.JobID]
-		st.Count++
-		if st.Last == nil || newerRun(run, st.Last) {
-			st.Last = run
-		}
+		st.Last = overlayOne(s, run)
 		out[run.JobID] = st
-	}
-	s.mu.RUnlock()
-
-	// Clone on the way out so a caller can never mutate stored state.
-	for jobID, st := range out {
-		if st.Last != nil {
-			st.Last = st.Last.clone()
-			out[jobID] = st
-		}
 	}
 	return out
 }
 
-// statsForJob is statsByJob narrowed to one job.
 func (s *RunStore) statsForJob(jobID string) runStats {
 	if jobID == "" {
 		return runStats{}
 	}
-	return s.statsByJob()[jobID]
+	ctx, cancel := dbCtx()
+	defer cancel()
+	var n int
+	_ = s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM runs WHERE job_id = $1`, jobID).Scan(&n)
+	run, err := scanRun(s.pool.QueryRow(ctx, `SELECT `+runCols+` FROM runs WHERE job_id = $1
+		ORDER BY started_at DESC, id DESC LIMIT 1`, jobID))
+	st := runStats{Count: n}
+	if err == nil {
+		st.Last = overlayOne(s, run)
+	}
+	return st
 }
 
-// backupTiming returns cadence/health inputs for the scheduler and job views:
-// the FinishedAt of the latest terminal backup (and whether it succeeded), plus
-// the FinishedAt of the latest successful backup. Times are UTC copies.
+func overlayOne(s *RunStore, run *Run) *Run {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if live, ok := s.live[run.ID]; ok {
+		return live.clone()
+	}
+	return run
+}
+
 func (s *RunStore) backupTiming(jobID string) (lastAttempt *time.Time, lastOK bool, lastSuccess *time.Time) {
 	if jobID == "" {
 		return nil, false, nil
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	ctx, cancel := dbCtx()
+	defer cancel()
 
-	var bestAttempt, bestSuccess *Run
-	for _, run := range s.index {
-		if run.JobID != jobID || run.Kind != KindBackup || !run.Status.Terminal() {
-			continue
+	pick := func(onlyOK bool) *Run {
+		q := `SELECT ` + runCols + ` FROM runs
+			WHERE job_id = $1 AND kind = $2 AND status IN ('success','success_warnings','failed','canceled','interrupted')`
+		args := []any{jobID, string(KindBackup)}
+		if onlyOK {
+			q = `SELECT ` + runCols + ` FROM runs
+				WHERE job_id = $1 AND kind = $2 AND status IN ('success','success_warnings')`
 		}
-		if bestAttempt == nil || newerFinished(run, bestAttempt) {
-			bestAttempt = run
+		q += ` ORDER BY COALESCE(finished_at, started_at) DESC, id DESC LIMIT 1`
+		run, err := scanRun(s.pool.QueryRow(ctx, q, args...))
+		if err != nil {
+			return nil
 		}
-		if run.Status == StatusSuccess || run.Status == StatusSuccessWarnings {
-			if bestSuccess == nil || newerFinished(run, bestSuccess) {
-				bestSuccess = run
-			}
-		}
+		return run
 	}
-	if bestAttempt != nil {
-		t := bestAttempt.FinishedAt
+
+	if best := pick(false); best != nil {
+		t := best.FinishedAt
 		if t == nil {
-			t = &bestAttempt.StartedAt
+			t = &best.StartedAt
 		}
 		cp := t.UTC()
 		lastAttempt = &cp
-		lastOK = bestAttempt.Status == StatusSuccess || bestAttempt.Status == StatusSuccessWarnings
+		lastOK = best.Status == StatusSuccess || best.Status == StatusSuccessWarnings
 	}
-	if bestSuccess != nil {
-		t := bestSuccess.FinishedAt
+	if best := pick(true); best != nil {
+		t := best.FinishedAt
 		if t == nil {
-			t = &bestSuccess.StartedAt
+			t = &best.StartedAt
 		}
 		cp := t.UTC()
 		lastSuccess = &cp
@@ -214,7 +289,6 @@ func (s *RunStore) backupTiming(jobID string) (lastAttempt *time.Time, lastOK bo
 	return lastAttempt, lastOK, lastSuccess
 }
 
-// newerFinished prefers FinishedAt, falling back to StartedAt, then id.
 func newerFinished(a, b *Run) bool {
 	at := a.StartedAt
 	if a.FinishedAt != nil {
@@ -230,127 +304,132 @@ func newerFinished(a, b *Run) bool {
 	return at.After(bt)
 }
 
-// runsForJob returns a job's run history, newest first.
 func (s *RunStore) runsForJob(jobID string) []*Run {
-	return s.list(func(r *Run) bool { return r.JobID == jobID })
+	runs, _ := s.query("", "", jobID, 0)
+	return runs
 }
 
-// activeRuns returns runs currently marked as running/starting.
 func (s *RunStore) activeRuns() []*Run {
-	return s.list(func(r *Run) bool { return r.Status.Active() })
+	runs, _ := s.query("active", "", "", 0)
+	return runs
 }
 
-// ReadLog returns a run's log lines with Seq greater than afterSeq. A torn final
-// line (from a crash mid-append) fails to parse and is skipped.
 func (s *RunStore) ReadLog(id string, afterSeq int64) ([]LogLine, error) {
 	if _, ok := s.Get(id); !ok {
 		return nil, notFoundf("run not found")
 	}
-	f, err := os.Open(s.logPath(id))
-	if errors.Is(err, os.ErrNotExist) {
-		return []LogLine{}, nil
-	}
+	ctx, cancel := dbCtx()
+	defer cancel()
+	rows, err := s.pool.Query(ctx, `
+		SELECT seq, ts, stream, level, message
+		FROM run_log_lines WHERE run_id = $1 AND seq > $2 ORDER BY seq`, id, afterSeq)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-
+	defer rows.Close()
 	out := []LogLine{}
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
-	for sc.Scan() {
+	for rows.Next() {
 		var ll LogLine
-		if err := json.Unmarshal(sc.Bytes(), &ll); err != nil {
-			continue // torn/partial line
+		var stream *string
+		if err := rows.Scan(&ll.Seq, &ll.TS, &stream, &ll.Level, &ll.Message); err != nil {
+			continue
 		}
-		if ll.Seq > afterSeq {
-			out = append(out, ll)
+		if stream != nil {
+			ll.Stream = *stream
 		}
+		out = append(out, ll)
 	}
 	return out, nil
 }
 
-// writeRunLocked persists a run record atomically. Caller holds s.mu.
-func (s *RunStore) writeRunLocked(run *Run) error {
-	return writeJSONFileAtomic(s.runPath(run.ID), run)
-}
-
-// prune keeps only the newest keepPerJob runs per job (jobless runs, grouped by
-// their empty job id, are capped the same way), deleting older run directories.
-// Active runs are never pruned. Called at startup to bound history and the scan.
 func (s *RunStore) prune(keepPerJob int) {
 	if keepPerJob <= 0 {
 		return
 	}
-	counts := map[string]int{}
-	for _, run := range s.list(nil) { // newest first
-		if run.Status.Active() {
-			continue
-		}
-		counts[run.JobID]++
-		if counts[run.JobID] > keepPerJob {
-			s.deleteRun(run.ID)
+	ctx, cancel := dbCtx()
+	defer cancel()
+	rows, err := s.pool.Query(ctx, `
+		DELETE FROM runs
+		WHERE id IN (
+			SELECT id FROM (
+				SELECT id, status,
+					ROW_NUMBER() OVER (
+						PARTITION BY COALESCE(job_id, '')
+						ORDER BY started_at DESC, id DESC
+					) AS rn
+				FROM runs
+			) t
+			WHERE rn > $1 AND status NOT IN ('starting', 'running')
+		)
+		RETURNING id`, keepPerJob)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	s.mu.Lock()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err == nil {
+			delete(s.live, id)
 		}
 	}
+	s.mu.Unlock()
 }
 
 func (s *RunStore) deleteRun(id string) {
+	ctx, cancel := dbCtx()
+	defer cancel()
+	_, _ = s.pool.Exec(ctx, `DELETE FROM runs WHERE id = $1`, id)
 	s.mu.Lock()
-	delete(s.index, id)
+	delete(s.live, id)
 	s.mu.Unlock()
-	_ = os.RemoveAll(s.runDir(id))
 }
 
-// AppendSystemLine appends a system log line to a run's log, continuing the
-// per-run seq. Used by reconcile, where no live handle exists to own the seq.
 func (s *RunStore) AppendSystemLine(id, level, message string) {
-	lines, _ := s.ReadLog(id, 0)
-	next := int64(1)
-	if n := len(lines); n > 0 {
-		next = lines[n-1].Seq + 1
-	}
-	line := LogLine{Seq: next, TS: time.Now().UTC(), Stream: "system", Level: level, Message: message}
-	data, err := json.Marshal(line)
+	line := LogLine{TS: time.Now().UTC(), Stream: "system", Level: level, Message: message}
+	ctx, cancel := dbCtx()
+	defer cancel()
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO run_log_lines (run_id, seq, ts, stream, level, message)
+		SELECT $1, COALESCE(MAX(seq), 0) + 1, $2, $3, $4, $5
+		FROM run_log_lines WHERE run_id = $1
+		RETURNING seq`,
+		id, line.TS, line.Stream, line.Level, line.Message,
+	).Scan(&line.Seq)
 	if err != nil {
 		return
 	}
-	f, err := os.OpenFile(s.logPath(id), os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
-	if err != nil {
-		return
-	}
-	// A prior crash may have left a torn (newline-less) final line; start on a
-	// clean boundary so this system line stays parseable. ReadAt does not disturb
-	// the O_APPEND write offset.
-	if fi, statErr := f.Stat(); statErr == nil && fi.Size() > 0 {
-		last := make([]byte, 1)
-		if _, rerr := f.ReadAt(last, fi.Size()-1); rerr == nil && last[0] != '\n' {
-			data = append([]byte{'\n'}, data...)
-		}
-	}
-	_, _ = f.Write(append(data, '\n'))
-	_ = f.Sync()
-	_ = f.Close()
 	s.bus.publishLog(id, line)
 }
 
-// reconcile makes the durable records honest on startup: every run still marked
-// active is marked interrupted (after reaping any orphaned restic child a crash
-// left behind). It returns the repository ids that had interrupted runs, for a
-// best-effort stale-lock cleanup. It runs before the server accepts traffic, so
-// no concurrent run activity races it.
 func (s *RunStore) reconcile(reap func(pid int, startToken string) bool) []string {
+	ctx, cancel := dbCtx()
+	defer cancel()
+	rows, err := s.pool.Query(ctx, `SELECT id, repository_id, pid, pid_start FROM runs WHERE status IN ('starting','running')`)
+	if err != nil {
+		return nil
+	}
 	type item struct {
 		id, repoID, startToken string
 		pid                    int
 	}
 	var items []item
-	s.mu.RLock()
-	for _, run := range s.index {
-		if run.Status.Active() {
-			items = append(items, item{run.ID, run.RepositoryID, run.PIDStart, run.PID})
+	for rows.Next() {
+		var it item
+		var pid *int
+		var start *string
+		if err := rows.Scan(&it.id, &it.repoID, &pid, &start); err != nil {
+			continue
 		}
+		if pid != nil {
+			it.pid = *pid
+		}
+		if start != nil {
+			it.startToken = *start
+		}
+		items = append(items, it)
 	}
-	s.mu.RUnlock()
+	rows.Close()
 
 	repoSet := map[string]bool{}
 	for _, it := range items {
@@ -366,6 +445,7 @@ func (s *RunStore) reconcile(reap func(pid int, startToken string) bool) []strin
 				r.Error = "interrupted: the application restarted while this run was in progress"
 			}
 		})
+		s.dropLive(it.id)
 		if it.repoID != "" {
 			repoSet[it.repoID] = true
 		}
@@ -378,9 +458,6 @@ func (s *RunStore) reconcile(reap func(pid int, startToken string) bool) []strin
 	return repos
 }
 
-// Begin creates a new run: it assigns a time-sortable id, writes run.json,
-// opens the append-only log, indexes the run and returns a live handle the
-// coordinator uses to stream events into the durable record.
 func (s *RunStore) Begin(run *Run) (*runHandle, error) {
 	now := time.Now().UTC()
 	if run.StartedAt.IsZero() {
@@ -391,93 +468,193 @@ func (s *RunStore) Begin(run *Run) (*runHandle, error) {
 		run.Status = StatusStarting
 	}
 
-	if err := os.MkdirAll(s.runDir(run.ID), 0o700); err != nil {
-		return nil, err
-	}
-	logf, err := os.OpenFile(s.logPath(run.ID), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
+	if err := s.insertRun(run); err != nil {
 		return nil, err
 	}
 
 	s.mu.Lock()
-	stored := run.clone()
-	s.index[run.ID] = stored
-	err = s.writeRunLocked(stored)
-	if err != nil {
-		delete(s.index, run.ID)
-	}
+	s.live[run.ID] = run.clone()
 	s.mu.Unlock()
-	if err != nil {
-		// Don't leave an orphaned run directory (log.jsonl with no run.json) that
-		// nothing would ever reclaim.
-		logf.Close()
-		_ = os.RemoveAll(s.runDir(run.ID))
-		return nil, err
-	}
 
-	s.bus.publishRun(stored.clone())
-	return &runHandle{store: s, id: run.ID, logf: logf}, nil
+	s.bus.publishRun(run.clone())
+	return &runHandle{store: s, id: run.ID}, nil
 }
 
-// mutate applies fn to the stored run under the lock, persists it, and returns a
-// clone. It is the single write path for run-record changes.
 func (s *RunStore) mutate(id string, persist bool, fn func(*Run)) *Run {
 	s.mu.Lock()
-	run, ok := s.index[id]
+	run, ok := s.live[id]
+	s.mu.Unlock()
 	if !ok {
-		s.mu.Unlock()
-		return nil
+		run, ok = s.getDB(id)
+		if !ok {
+			return nil
+		}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if existing, exists := s.live[id]; exists {
+		run = existing
+	} else {
+		s.live[id] = run
 	}
 	fn(run)
 	if persist {
-		_ = s.writeRunLocked(run)
+		_ = s.updateRun(run)
 	}
-	clone := run.clone()
+	return run.clone()
+}
+
+func (s *RunStore) dropLive(id string) {
+	s.mu.Lock()
+	delete(s.live, id)
 	s.mu.Unlock()
-	return clone
+}
+
+func (s *RunStore) insertRun(run *Run) error {
+	ctx, cancel := dbCtx()
+	defer cancel()
+	_, err := s.pool.Exec(ctx, `INSERT INTO runs (`+runCols+`) VALUES (
+		$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+		runWriteArgs(run)...,
+	)
+	return err
+}
+
+func (s *RunStore) updateRun(run *Run) error {
+	ctx, cancel := dbCtx()
+	defer cancel()
+	args := runWriteArgs(run)
+	_, err := s.pool.Exec(ctx, `UPDATE runs SET
+		kind=$2, status=$3, job_id=$4, repository_id=$5, job_name=$6, folder_path=$7, repo_name=$8,
+		params=$9, started_at=$10, finished_at=$11, pid=$12, pid_start=$13, progress=$14, summary=$15,
+		exit_code=$16, error=$17
+		WHERE id=$1`, args...)
+	return err
+}
+
+func runWriteArgs(run *Run) []any {
+	return []any{
+		run.ID, string(run.Kind), string(run.Status),
+		emptyToNil(run.JobID), run.RepositoryID, emptyToNil(run.JobName), emptyToNil(run.FolderPath), run.RepoName,
+		mapJSON(run.Params), run.StartedAt, run.FinishedAt, zeroIntToNil(run.PID), emptyToNil(run.PIDStart),
+		mustJSON(run.Progress), summaryJSON(run.Summary), run.ExitCode, emptyToNil(run.Error),
+	}
+}
+
+func scanRun(row interface{ Scan(dest ...any) error }) (*Run, error) {
+	var r Run
+	var jobID, jobName, folderPath, pidStart, errMsg *string
+	var params, progress, summary []byte
+	var pid *int
+	err := row.Scan(
+		&r.ID, &r.Kind, &r.Status, &jobID, &r.RepositoryID, &jobName, &folderPath, &r.RepoName,
+		&params, &r.StartedAt, &r.FinishedAt, &pid, &pidStart, &progress, &summary, &r.ExitCode, &errMsg,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if jobID != nil {
+		r.JobID = *jobID
+	}
+	if jobName != nil {
+		r.JobName = *jobName
+	}
+	if folderPath != nil {
+		r.FolderPath = *folderPath
+	}
+	if pid != nil {
+		r.PID = *pid
+	}
+	if pidStart != nil {
+		r.PIDStart = *pidStart
+	}
+	if errMsg != nil {
+		r.Error = *errMsg
+	}
+	if len(params) > 0 {
+		_ = json.Unmarshal(params, &r.Params)
+	}
+	if len(progress) > 0 {
+		_ = json.Unmarshal(progress, &r.Progress)
+	}
+	if len(summary) > 0 {
+		var sum Summary
+		if json.Unmarshal(summary, &sum) == nil {
+			r.Summary = &sum
+		}
+	}
+	return &r, nil
+}
+
+func mapJSON(m map[string]string) any {
+	if len(m) == 0 {
+		return nil
+	}
+	return mustJSON(m)
+}
+
+func summaryJSON(s *Summary) any {
+	if s == nil {
+		return nil
+	}
+	return mustJSON(s)
+}
+
+func mustJSON(v any) []byte {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return []byte("{}")
+	}
+	return b
+}
+
+func zeroIntToNil(n int) any {
+	if n == 0 {
+		return nil
+	}
+	return n
 }
 
 // runHandle is the live side of one running operation. It implements RunSink:
 // the coordinator hands it to the Runner, which streams events through it into
-// the durable record and the event bus. It owns the log file and per-run seq
-// counter, which a single serialized appender guards so seq stays monotonic even
-// though restic's stdout and stderr are scanned concurrently.
+// the durable record and the event bus.
 type runHandle struct {
 	store *RunStore
 	id    string
 
 	logMu sync.Mutex
-	logf  *os.File
 	seq   int64
+	done  bool
 
 	progMu    sync.Mutex
 	lastFlush time.Time
 }
 
-// Log appends a durable, seq-numbered log line and publishes it live. Once the
-// run has finalized (log closed), Log is a no-op: this keeps the per-run seq in
-// 1:1 correspondence with durable lines and avoids publishing a phantom line
-// that a late Stop could otherwise emit during the finalize→finish window.
 func (h *runHandle) Log(level, stream, message string) {
 	h.logMu.Lock()
-	if h.logf == nil {
+	if h.done {
 		h.logMu.Unlock()
 		return
 	}
 	h.seq++
 	line := LogLine{Seq: h.seq, TS: time.Now().UTC(), Stream: stream, Level: level, Message: message}
-	if data, err := json.Marshal(line); err == nil {
-		data = append(data, '\n')
-		_, _ = h.logf.Write(data)
+	ctx, cancel := dbCtx()
+	_, err := h.store.pool.Exec(ctx, `
+		INSERT INTO run_log_lines (run_id, seq, ts, stream, level, message)
+		VALUES ($1,$2,$3,$4,$5,$6)`,
+		h.id, line.Seq, line.TS, emptyToNil(line.Stream), line.Level, line.Message,
+	)
+	cancel()
+	if err != nil {
+		h.seq-- // keep seq in 1:1 correspondence with durable lines
+		h.logMu.Unlock()
+		return
 	}
 	h.logMu.Unlock()
-
 	h.store.bus.publishLog(h.id, line)
 }
 
-// Progress updates the run's last-value-wins progress. It is streamed live every
-// tick but only flushed to run.json on a throttle, so a page loaded mid-run sees
-// a recent bar without hammering the disk.
 func (h *runHandle) Progress(p Progress) {
 	h.progMu.Lock()
 	now := time.Now()
@@ -491,20 +668,15 @@ func (h *runHandle) Progress(p Progress) {
 	h.store.bus.publishProgress(h.id, p)
 }
 
-// Summary records the final result of a backup/restore (persisted immediately,
-// since it is rare and meaningful).
 func (h *runHandle) Summary(s Summary) {
 	cp := s
 	h.store.mutate(h.id, true, func(r *Run) { r.Summary = &cp })
 }
 
-// PID records the restic child's process id and start token, persisted so a
-// crash's orphan can be positively identified and reaped on the next startup.
 func (h *runHandle) PID(pid int, startToken string) {
 	h.store.mutate(h.id, true, func(r *Run) { r.PID = pid; r.PIDStart = startToken })
 }
 
-// setStatus transitions the run to a non-terminal status and publishes it.
 func (h *runHandle) setStatus(status RunStatus) {
 	run := h.store.mutate(h.id, true, func(r *Run) { r.Status = status })
 	if run != nil {
@@ -512,9 +684,6 @@ func (h *runHandle) setStatus(status RunStatus) {
 	}
 }
 
-// finalize writes the terminal state as the single authoritative last write
-// (status-first: run.json is atomic, so a run is only ever "running" or a final
-// state), closes the log, and publishes the finished run.
 func (h *runHandle) finalize(status RunStatus, exitCode int, errMsg string) *Run {
 	now := time.Now().UTC()
 	run := h.store.mutate(h.id, true, func(r *Run) {
@@ -527,12 +696,9 @@ func (h *runHandle) finalize(status RunStatus, exitCode int, errMsg string) *Run
 	})
 
 	h.logMu.Lock()
-	if h.logf != nil {
-		_ = h.logf.Sync()
-		_ = h.logf.Close()
-		h.logf = nil
-	}
+	h.done = true
 	h.logMu.Unlock()
+	h.store.dropLive(h.id)
 
 	if run != nil {
 		h.store.bus.publishRun(run)

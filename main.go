@@ -6,6 +6,7 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"flag"
 	"io/fs"
@@ -15,22 +16,37 @@ import (
 	"time"
 )
 
-// The entire web UI is embedded into the binary, so the app is a single,
-// dependency-free executable.
+// The entire web UI is embedded into the binary, so the app is a single
+// executable. Durable state lives in Postgres (see .env / DATABASE_URL).
 //
 //go:embed web
 var webFiles embed.FS
 
 func main() {
+	_ = loadDotEnv(".env")
+
 	addr := flag.String("addr", "127.0.0.1:8080", "address to listen on")
 	configPath := flag.String("config", "config.json", "path to the legacy JSON config file (imported once)")
-	dataDir := flag.String("data", "data", "directory for persisted app state (repositories, folders, jobs, runs)")
+	dataDir := flag.String("data", "data", "directory for ephemeral files (download workspaces)")
+	dsnFlag := flag.String("database", "", "Postgres URL (default: DATABASE_URL from the environment or .env)")
+	retain := flag.Int("retain-runs-per-job", 0, "keep only the newest N runs per job (0 = keep all)")
 	flag.Parse()
 
-	app, err := newApp(*dataDir)
+	dsn := resolveDSN(*dsnFlag)
+	if dsn == "" {
+		log.Fatal(missingDSNMessage())
+	}
+	pool, err := openDB(context.Background(), dsn)
+	if err != nil {
+		log.Fatalf("database: %v", err)
+	}
+	defer pool.Close()
+
+	app, err := newApp(*dataDir, pool)
 	if err != nil {
 		log.Fatalf("could not open data directory: %v", err)
 	}
+	app.retainRunsPerJob = *retain
 	if err := app.importLegacyConfig(*configPath); err != nil {
 		log.Printf("note: could not import legacy config: %v", err)
 	}

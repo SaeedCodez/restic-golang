@@ -3,18 +3,13 @@ package main
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"testing"
 	"time"
 )
 
 func newRunTestApp(t *testing.T, fake *fakeRunner) *App {
 	t.Helper()
-	app, err := newAppWithRunner(t.TempDir(), fake)
-	if err != nil {
-		t.Fatalf("newAppWithRunner: %v", err)
-	}
-	return app
+	return testApp(t, fake)
 }
 
 // makeJob creates a repository, folder and job with unique names and returns the
@@ -212,10 +207,7 @@ func TestRunStoreReloadFromDisk(t *testing.T) {
 
 	// A fresh store over the same directory sees the persisted run and its job
 	// history.
-	reloaded, err := newRunStore(filepath.Join(app.dataDir, "runs"), nil)
-	if err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	reloaded := newRunStore(testPool(t), nil)
 	got, ok := reloaded.Get(run.ID)
 	if !ok {
 		t.Fatal("run not present after reload")

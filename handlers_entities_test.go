@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -13,11 +14,7 @@ import (
 // HTTP handler, already authenticated for API calls.
 func testServer(t *testing.T) http.Handler {
 	t.Helper()
-	app, err := newApp(t.TempDir())
-	if err != nil {
-		t.Fatalf("newApp: %v", err)
-	}
-	return routesFor(t, app)
+	return routesFor(t, testApp(t, newResticRunner()))
 }
 
 // routesFor returns the app's HTTP handler with a test session cookie injected
@@ -160,16 +157,17 @@ func TestLegacyConfigImport(t *testing.T) {
 	dir := t.TempDir()
 	// Write a legacy config.json.
 	cfgPath := filepath.Join(dir, "config.json")
-	if err := writeJSONFileAtomic(cfgPath, map[string]any{
+	b, err := json.Marshal(map[string]any{
 		"backendType": "Local", "localPath": "/srv/repo", "password": "pw",
-	}); err != nil {
+	})
+	if err != nil {
+		t.Fatalf("marshal legacy config: %v", err)
+	}
+	if err := os.WriteFile(cfgPath, b, 0o600); err != nil {
 		t.Fatalf("write legacy config: %v", err)
 	}
 
-	app, err := newApp(filepath.Join(dir, "data"))
-	if err != nil {
-		t.Fatalf("newApp: %v", err)
-	}
+	app := testApp(t, newResticRunner())
 	if err := app.importLegacyConfig(cfgPath); err != nil {
 		t.Fatalf("import: %v", err)
 	}

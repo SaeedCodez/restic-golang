@@ -80,10 +80,7 @@ func TestStopHTTPEndpoint(t *testing.T) {
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})
 	fake := &fakeRunner{installed: true, streamFn: gatedStream(started, release)}
-	app, err := newAppWithRunner(t.TempDir(), fake)
-	if err != nil {
-		t.Fatalf("newAppWithRunner: %v", err)
-	}
+	app := testApp(t, fake)
 	h := routesFor(t, app)
 
 	_, jobID := makeJob(t, app, "a", "/data")

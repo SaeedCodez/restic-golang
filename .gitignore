@@ -1,6 +1,9 @@
 # Compiled binary
 /restic-web
 
+# Local secrets / machine-specific config
+.env
+
 # Local app state
 /config.json
 

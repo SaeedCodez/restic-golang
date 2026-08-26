@@ -44,9 +44,7 @@ func (s *Server) handleJobRuns(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, http.StatusNotFound, "not_found", "job not found")
 		return
 	}
-	runs := s.app.runs.runsForJob(r.PathValue("id"))
-	total := len(runs)
-	runs = limitRuns(runs, queryLimit(r))
+	runs, total := s.app.runs.query("", "", r.PathValue("id"), queryLimit(r))
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "runs": runs, "total": total})
 }
 
@@ -58,13 +56,6 @@ func queryLimit(r *http.Request) int {
 		}
 	}
 	return 0
-}
-
-func limitRuns(runs []*Run, limit int) []*Run {
-	if limit > 0 && len(runs) > limit {
-		return runs[:limit]
-	}
-	return runs
 }
 
 func (s *Server) handleRunGet(w http.ResponseWriter, r *http.Request) {
@@ -118,34 +109,6 @@ func (s *Server) handleRunStop(w http.ResponseWriter, r *http.Request) {
 // 137" rather than silently truncating.
 func (s *Server) handleRunList(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	status, kind, jobID := q.Get("status"), q.Get("kind"), q.Get("jobId")
-
-	runs := s.app.runs.list(func(run *Run) bool {
-		switch status {
-		case "", "all":
-		case "active":
-			if !run.Status.Active() {
-				return false
-			}
-		case "finished":
-			if !run.Status.Terminal() {
-				return false
-			}
-		default:
-			if string(run.Status) != status {
-				return false
-			}
-		}
-		if kind != "" && string(run.Kind) != kind {
-			return false
-		}
-		if jobID != "" && run.JobID != jobID {
-			return false
-		}
-		return true
-	})
-
-	total := len(runs)
-	runs = limitRuns(runs, queryLimit(r))
+	runs, total := s.app.runs.query(q.Get("status"), q.Get("kind"), q.Get("jobId"), queryLimit(r))
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "runs": runs, "total": total})
 }

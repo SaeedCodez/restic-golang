@@ -22,27 +22,16 @@ func TestClassifyRunCancelBeatsError(t *testing.T) {
 	}
 }
 
-// TestAppendSystemLineSurvivesTornWrite verifies a torn (newline-less) final log
-// line from a crash does not swallow the reconcile system message.
-func TestAppendSystemLineSurvivesTornWrite(t *testing.T) {
-	store, err := newRunStore(t.TempDir(), nil)
-	if err != nil {
-		t.Fatalf("newRunStore: %v", err)
-	}
-	run := &Run{Kind: KindBackup, Status: StatusRunning, RepositoryID: "r"}
+// TestAppendSystemLineContinuesSeq verifies a system line appended after a
+// crash (no live handle) continues the per-run seq.
+func TestAppendSystemLineContinuesSeq(t *testing.T) {
+	store := newRunStore(testPool(t), nil)
+	run := &Run{Kind: KindBackup, Status: StatusRunning, RepositoryID: "r", RepoName: "R"}
 	h, err := store.Begin(run)
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
 	h.Log("info", "system", "clean line")
-
-	// Simulate a crash mid-append: a partial JSON object with no trailing newline.
-	f, err := os.OpenFile(store.logPath(run.ID), os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		t.Fatalf("open log: %v", err)
-	}
-	_, _ = f.WriteString(`{"seq":2,"ts":"2026-0`)
-	f.Close()
 
 	store.AppendSystemLine(run.ID, "error", "interrupted note")
 
@@ -54,7 +43,7 @@ func TestAppendSystemLineSurvivesTornWrite(t *testing.T) {
 		}
 	}
 	if !sawNote {
-		t.Fatal("the interrupted system message was swallowed by the torn final line")
+		t.Fatal("the interrupted system message is missing")
 	}
 }
 

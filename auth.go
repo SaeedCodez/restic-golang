@@ -5,64 +5,44 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"os"
 	"sync"
 	"time"
 
 	"crypto/pbkdf2"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const (
-	authFileName       = "auth.json"
-	minPasswordLength  = 6
-	pbkdf2Iterations   = 210_000
-	pbkdf2KeyLen       = 32
-	passwordSaltLen    = 16
-	sessionTokenBytes  = 32
-	sessionCookieName  = "restic_session"
-	sessionTTL         = 30 * 24 * time.Hour
+	minPasswordLength = 6
+	pbkdf2Iterations  = 210_000
+	pbkdf2KeyLen      = 32
+	passwordSaltLen   = 16
+	sessionTokenBytes = 32
+	sessionCookieName = "restic_session"
+	sessionTTL        = 30 * 24 * time.Hour
 )
 
-// AuthStore persists the single app-login password (hashed) under the data dir.
+// AuthStore persists the single app-login password (hashed) in Postgres.
 type AuthStore struct {
 	mu   sync.RWMutex
-	path string
+	pool *pgxpool.Pool
 	salt []byte
 	hash []byte
 }
 
-type authFile struct {
-	Salt      string    `json:"salt"`
-	Hash      string    `json:"hash"`
-	UpdatedAt time.Time `json:"updatedAt"`
-}
-
-func loadAuthStore(path string) (*AuthStore, error) {
-	s := &AuthStore{path: path}
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return s, nil
-	}
+func loadAuthStore(pool *pgxpool.Pool) (*AuthStore, error) {
+	s := &AuthStore{pool: pool}
+	ctx, cancel := dbCtx()
+	defer cancel()
+	var salt, hash []byte
+	err := pool.QueryRow(ctx, `SELECT salt, hash FROM auth WHERE id = 1`).Scan(&salt, &hash)
 	if err != nil {
+		if err == pgx.ErrNoRows {
+			return s, nil
+		}
 		return nil, err
-	}
-	if len(data) == 0 {
-		return s, nil
-	}
-	var f authFile
-	if err := json.Unmarshal(data, &f); err != nil {
-		return nil, fmt.Errorf("could not parse auth store %q: %w", path, err)
-	}
-	salt, err := hex.DecodeString(f.Salt)
-	if err != nil || len(salt) == 0 {
-		return nil, fmt.Errorf("auth store %q has an invalid salt", path)
-	}
-	hash, err := hex.DecodeString(f.Hash)
-	if err != nil || len(hash) == 0 {
-		return nil, fmt.Errorf("auth store %q has an invalid hash", path)
 	}
 	s.salt = salt
 	s.hash = hash
@@ -87,21 +67,14 @@ func hashPassword(password string, salt []byte) ([]byte, error) {
 }
 
 func (s *AuthStore) saveLocked(salt, hash []byte) error {
-	f := authFile{
-		Salt:      hex.EncodeToString(salt),
-		Hash:      hex.EncodeToString(hash),
-		UpdatedAt: time.Now().UTC(),
-	}
-	data, err := json.MarshalIndent(f, "", "  ")
+	ctx, cancel := dbCtx()
+	defer cancel()
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO auth (id, salt, hash, updated_at) VALUES (1, $1, $2, $3)
+		ON CONFLICT (id) DO UPDATE SET salt = EXCLUDED.salt, hash = EXCLUDED.hash, updated_at = EXCLUDED.updated_at`,
+		salt, hash, time.Now().UTC(),
+	)
 	if err != nil {
-		return err
-	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, s.path); err != nil {
-		_ = os.Remove(tmp)
 		return err
 	}
 	s.salt = salt

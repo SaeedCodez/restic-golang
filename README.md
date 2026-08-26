@@ -67,7 +67,10 @@ A few things worth knowing from the screenshots above:
 ## Prerequisites
 
 1. **Go** 1.23 or newer — <https://go.dev/dl/>
-2. **restic** on your `PATH`. The app detects when it is missing and shows a clear
+2. **PostgreSQL** 16 or newer on your machine — the app stores repositories, jobs,
+   runs and logs there. On macOS: `brew install postgresql@17 && brew services start postgresql@17`,
+   then `createdb restic`.
+3. **restic** on your `PATH`. The app detects when it is missing and shows a clear
    message. Install it with `brew install restic`, `apt install restic`,
    `dnf install restic`, `scoop install restic`, or a binary from
    <https://github.com/restic/restic/releases>. Verify with `restic version`.
@@ -75,12 +78,15 @@ A few things worth knowing from the screenshots above:
 ## How to run
 
 ```sh
+cp .env.example .env   # once — then edit DATABASE_URL for your local Postgres
 go run .
 ```
 
-Then open the printed URL (default `http://127.0.0.1:8080`). On first open the
-app asks you to choose a login password; later visits show the login page, and
-you can change the password under Settings.
+The app loads `.env` from the working directory on startup (real environment
+variables still win if already set). Then open the printed URL (default
+`http://127.0.0.1:8080`). On first open the app asks you to choose a login
+password; later visits show the login page, and you can change the password under
+Settings. Migrations run automatically on startup.
 
 Flags:
 
@@ -89,7 +95,11 @@ go run . -addr 127.0.0.1:9000 -data ./data
 ```
 
 - `-addr` — address to listen on.
-- `-data` — directory for persisted state (default `./data`).
+- `-database` — Postgres URL (overrides `DATABASE_URL` from the environment / `.env`).
+- `-data` — directory for ephemeral files such as download zips (default `./data`).
+  Durable state is in Postgres, not this directory.
+- `-retain-runs-per-job` — keep only the newest N runs per job on startup
+  (`0` = keep all, the default).
 - `-config` — a legacy `config.json` to import once into a "Default" repository.
 
 Build a standalone binary (the web UI is embedded):
@@ -100,6 +110,14 @@ go build -o restic-web . && ./restic-web
 
 Node is **not** needed to build or run the app — only to change the interface.
 See [Working on the UI](#working-on-the-ui).
+
+Tests use the same `.env` (`DATABASE_URL`), or `TEST_DATABASE_URL` if you want a
+separate database:
+
+```sh
+createdb restic_test   # once, optional
+go test ./...
+```
 
 ## Quick start (Local backend — no credentials)
 
@@ -263,19 +281,17 @@ stored choice is applied before first paint, so the page never flashes.
 
 ## Notes & limitations
 
-- The **login password** is stored as a PBKDF2-SHA256 hash in `data/auth.json`
-  (`0600`). Sessions are in-memory cookies — restarting the app means logging in
-  again.
+- The **login password** is stored as a PBKDF2-SHA256 hash in Postgres. Sessions
+  are in-memory cookies — restarting the app means logging in again.
 - Secrets (repository passwords, S3 secret keys) are stored **in plaintext** in
-  the data directory (files are `0600`). Fine for a local single-user tool; not
-  for shared or production use. They are read through a single choke point, so
-  encrypting at rest later is a localized change. They are never sent to the
-  browser: the API reports only whether a secret is set, and an edit that leaves
-  a secret field blank keeps the stored value.
-- Retention keeps the newest 100 runs per job on startup; download workspaces are
-  ephemeral and wiped on startup. Snapshot retention (`forget` / `prune`) is not
-  built in yet — automatic backups will grow the repository until you prune
-  outside the app or that lands as a follow-up.
+  Postgres. Restrict who can reach the database. They are read through a single
+  choke point, so encrypting at rest later is a localized change. They are never
+  sent to the browser: the API reports only whether a secret is set, and an edit
+  that leaves a secret field blank keeps the stored value.
+- Run history is kept until you set `-retain-runs-per-job`. Download workspaces
+  are ephemeral and wiped on startup. Snapshot retention (`forget` / `prune`) is
+  not built in yet — automatic backups will grow the restic repository until you
+  prune outside the app or that lands as a follow-up.
 - A browser cannot hand the server a real local path, so source and target
   folders are entered as absolute-path text fields. A mistyped path surfaces as a
   failed run rather than as validation.
@@ -288,7 +304,7 @@ stored choice is applied before first paint, so the page never flashes.
 
 For automatic backups to fire overnight, keep `restic-web` running under the OS
 service manager. Sample units live in `docs/systemd/` and `docs/launchd/` —
-copy, edit the binary and data paths, then enable them.
+copy, edit the binary path, data directory, and `DATABASE_URL`, then enable them.
 
 **systemd (Linux):**
 

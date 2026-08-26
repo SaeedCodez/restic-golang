@@ -1,38 +1,25 @@
 package main
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 )
 
-// seedRunningRun writes a run left in the "running" state (as a crash would),
-// with the given pid, and returns its id.
-func seedRunningRun(t *testing.T, runsDir, repoID string, pid int) string {
+func seedRunningRun(t *testing.T, repoID string, pid int) string {
 	t.Helper()
-	store, err := newRunStore(runsDir, nil)
-	if err != nil {
-		t.Fatalf("newRunStore: %v", err)
-	}
+	store := newRunStore(testPool(t), nil)
 	run := &Run{Kind: KindBackup, Status: StatusRunning, RepositoryID: repoID, RepoName: "R", PID: pid}
 	h, err := store.Begin(run)
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
 	h.Log("info", "system", "was running when the app died")
-	// Deliberately do not finalize: simulate the process dying mid-run.
 	return run.ID
 }
 
 func TestReconcileMarksRunningAsInterrupted(t *testing.T) {
-	runsDir := filepath.Join(t.TempDir(), "runs")
-	runID := seedRunningRun(t, runsDir, "repo1", 0)
+	runID := seedRunningRun(t, "repo1", 0)
 
-	// Restart: a fresh store loads the run still marked running.
-	store, err := newRunStore(runsDir, nil)
-	if err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	store := newRunStore(testPool(t), nil)
 	if len(store.activeRuns()) != 1 {
 		t.Fatalf("precondition: want 1 active run, got %d", len(store.activeRuns()))
 	}
@@ -56,7 +43,6 @@ func TestReconcileMarksRunningAsInterrupted(t *testing.T) {
 		t.Fatalf("affected repos = %v, want [repo1]", repos)
 	}
 
-	// The log continues monotonically and records the interruption.
 	lines, _ := store.ReadLog(runID, 0)
 	if len(lines) < 2 {
 		t.Fatalf("want at least 2 log lines, got %d", len(lines))
@@ -72,10 +58,9 @@ func TestReconcileMarksRunningAsInterrupted(t *testing.T) {
 }
 
 func TestReconcileReapsOrphan(t *testing.T) {
-	runsDir := filepath.Join(t.TempDir(), "runs")
-	runID := seedRunningRun(t, runsDir, "repo1", 1234)
+	runID := seedRunningRun(t, "repo1", 1234)
 
-	store, _ := newRunStore(runsDir, nil)
+	store := newRunStore(testPool(t), nil)
 	reaped := 0
 	store.reconcile(func(pid int, startToken string) bool {
 		if pid == 1234 {
@@ -100,15 +85,9 @@ func TestReconcileReapsOrphan(t *testing.T) {
 }
 
 func TestAppReconcileEndToEnd(t *testing.T) {
-	dir := t.TempDir()
-	runsDir := filepath.Join(dir, "runs")
-	runID := seedRunningRun(t, runsDir, "repo1", 0)
+	runID := seedRunningRun(t, "repo1", 0)
 
-	// Build an app over the same data dir (restic absent, so no unlock spawns).
-	app, err := newAppWithRunner(dir, &fakeRunner{installed: false})
-	if err != nil {
-		t.Fatalf("newAppWithRunner: %v", err)
-	}
+	app := testApp(t, &fakeRunner{installed: false})
 	if len(app.runs.activeRuns()) != 1 {
 		t.Fatalf("precondition: want 1 active, got %d", len(app.runs.activeRuns()))
 	}
@@ -123,13 +102,6 @@ func TestAppReconcileEndToEnd(t *testing.T) {
 }
 
 func TestReconcileNoActiveRunsIsNoop(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "runs"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	app, err := newAppWithRunner(dir, &fakeRunner{installed: true})
-	if err != nil {
-		t.Fatalf("newAppWithRunner: %v", err)
-	}
-	app.Reconcile() // must not panic or error with an empty store
+	app := testApp(t, &fakeRunner{installed: true})
+	app.Reconcile()
 }

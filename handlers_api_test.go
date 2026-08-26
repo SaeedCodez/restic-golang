@@ -62,10 +62,7 @@ func TestRepositorySecretsNeverReachTheClient(t *testing.T) {
 }
 
 func TestRepositoryUpdateKeepsOmittedSecrets(t *testing.T) {
-	app, err := newApp(t.TempDir())
-	if err != nil {
-		t.Fatalf("newApp: %v", err)
-	}
+	app := testApp(t, newResticRunner())
 	h := routesFor(t, app)
 
 	repo, err := app.repos.Create(Repository{

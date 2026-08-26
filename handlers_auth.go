@@ -25,9 +25,9 @@ func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":             true,
-		"setupRequired":  !configured,
-		"authenticated":  authenticated,
+		"ok":            true,
+		"setupRequired": !configured,
+		"authenticated": authenticated,
 	})
 }
 

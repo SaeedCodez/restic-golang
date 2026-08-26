@@ -139,10 +139,7 @@ func TestRealRunnerAgainstFakeRestic(t *testing.T) {
 // minus the HTTP layer.
 func TestRealRunnerBackupThroughCoordinator(t *testing.T) {
 	installFakeRestic(t)
-	app, err := newAppWithRunner(t.TempDir(), newResticRunner())
-	if err != nil {
-		t.Fatalf("newAppWithRunner: %v", err)
-	}
+	app := testApp(t, newResticRunner())
 	repo, _ := app.repos.Create(Repository{Meta: Meta{Name: "R"}, BackendType: "Local", LocalPath: filepath.Join(t.TempDir(), "repo"), Password: "pw"})
 	// Initialize via a run.
 	initRun, err := app.coord.StartInit(repo.ID)
@@ -173,10 +170,7 @@ func TestRealRunnerBackupThroughCoordinator(t *testing.T) {
 // repo and retries, and the run succeeds — the full production auto-init path.
 func TestRealRunnerBackupAutoInitializes(t *testing.T) {
 	installFakeRestic(t)
-	app, err := newAppWithRunner(t.TempDir(), newResticRunner())
-	if err != nil {
-		t.Fatalf("newAppWithRunner: %v", err)
-	}
+	app := testApp(t, newResticRunner())
 	// Deliberately NOT initialized.
 	repo, _ := app.repos.Create(Repository{Meta: Meta{Name: "R"}, BackendType: "Local", LocalPath: filepath.Join(t.TempDir(), "repo"), Password: "pw"})
 	folder, _ := app.folders.Create(Folder{Meta: Meta{Name: "F"}, Path: t.TempDir()})

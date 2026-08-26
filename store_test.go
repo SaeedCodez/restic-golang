@@ -2,22 +2,16 @@ package main
 
 import (
 	"errors"
-	"path/filepath"
 	"testing"
 )
 
-func newTestRepoStore(t *testing.T) (*EntityStore[Repository, *Repository], string) {
+func newTestRepoStore(t *testing.T) *repoStore {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "repositories.json")
-	s, err := loadEntityStore[Repository, *Repository](path, "repository")
-	if err != nil {
-		t.Fatalf("loadEntityStore: %v", err)
-	}
-	return s, path
+	return newRepoStore(testPool(t))
 }
 
 func TestEntityStoreCreateGetList(t *testing.T) {
-	s, _ := newTestRepoStore(t)
+	s := newTestRepoStore(t)
 
 	created, err := s.Create(Repository{Meta: Meta{Name: "Local one"}, BackendType: "Local", LocalPath: "/tmp/repo", Password: "pw"})
 	if err != nil {
@@ -38,7 +32,6 @@ func TestEntityStoreCreateGetList(t *testing.T) {
 		t.Fatalf("Get returned wrong entity: %+v", got)
 	}
 
-	// Mutating the returned copy must not affect stored state.
 	got.Name = "mutated"
 	again, _ := s.Get(created.ID)
 	if again.Name != "Local one" {
@@ -54,12 +47,11 @@ func TestEntityStoreCreateGetList(t *testing.T) {
 }
 
 func TestEntityStoreNameUniqueness(t *testing.T) {
-	s, _ := newTestRepoStore(t)
+	s := newTestRepoStore(t)
 
 	if _, err := s.Create(Repository{Meta: Meta{Name: "Repo"}, BackendType: "Local", LocalPath: "/a", Password: "pw"}); err != nil {
 		t.Fatalf("first Create: %v", err)
 	}
-	// Case-insensitive duplicate must conflict.
 	_, err := s.Create(Repository{Meta: Meta{Name: "repo"}, BackendType: "Local", LocalPath: "/b", Password: "pw"})
 	var ce *ConflictError
 	if !errors.As(err, &ce) {
@@ -68,11 +60,10 @@ func TestEntityStoreNameUniqueness(t *testing.T) {
 }
 
 func TestEntityStoreUpdate(t *testing.T) {
-	s, _ := newTestRepoStore(t)
+	s := newTestRepoStore(t)
 	a, _ := s.Create(Repository{Meta: Meta{Name: "A"}, BackendType: "Local", LocalPath: "/a", Password: "pw"})
 	b, _ := s.Create(Repository{Meta: Meta{Name: "B"}, BackendType: "Local", LocalPath: "/b", Password: "pw"})
 
-	// Rename A -> A2, changing a field.
 	upd := a
 	upd.Name = "A2"
 	upd.LocalPath = "/a2"
@@ -87,7 +78,6 @@ func TestEntityStoreUpdate(t *testing.T) {
 		t.Fatal("Update did not preserve CreatedAt")
 	}
 
-	// Renaming A2 -> B must conflict with the existing B.
 	upd2 := out
 	upd2.Name = "B"
 	if _, err := s.Update(out.ID, upd2); err == nil {
@@ -95,14 +85,13 @@ func TestEntityStoreUpdate(t *testing.T) {
 	}
 	_ = b
 
-	// Updating a missing id is NotFound.
 	if _, err := s.Update("nope", upd); !errors.As(err, new(*NotFoundError)) {
 		t.Fatalf("Update missing: want NotFoundError, got %v", err)
 	}
 }
 
 func TestEntityStoreDeleteAndPersistence(t *testing.T) {
-	s, path := newTestRepoStore(t)
+	s := newTestRepoStore(t)
 	a, _ := s.Create(Repository{Meta: Meta{Name: "A"}, BackendType: "Local", LocalPath: "/a", Password: "pw"})
 	_, _ = s.Create(Repository{Meta: Meta{Name: "B"}, BackendType: "Local", LocalPath: "/b", Password: "pw"})
 
@@ -116,11 +105,7 @@ func TestEntityStoreDeleteAndPersistence(t *testing.T) {
 		t.Fatalf("Delete missing: want NotFoundError, got %v", err)
 	}
 
-	// Reload from disk: should see exactly the surviving entity.
-	reloaded, err := loadEntityStore[Repository, *Repository](path, "repository")
-	if err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	reloaded := newRepoStore(testPool(t))
 	if reloaded.Count() != 1 {
 		t.Fatalf("reloaded Count = %d, want 1", reloaded.Count())
 	}
@@ -129,8 +114,8 @@ func TestEntityStoreDeleteAndPersistence(t *testing.T) {
 	}
 }
 
-func TestEntityStoreMissingFileIsEmpty(t *testing.T) {
-	s, _ := newTestRepoStore(t)
+func TestEntityStoreEmptyOnOpen(t *testing.T) {
+	s := newTestRepoStore(t)
 	if s.Count() != 0 {
 		t.Fatalf("fresh store Count = %d, want 0", s.Count())
 	}
@@ -140,11 +125,14 @@ func TestEntityStoreMissingFileIsEmpty(t *testing.T) {
 }
 
 func TestFolderAndJobStores(t *testing.T) {
-	dir := t.TempDir()
-	fs, err := loadEntityStore[Folder, *Folder](filepath.Join(dir, "folders.json"), "folder")
+	pool := testPool(t)
+	rs := newRepoStore(pool)
+	repo, err := rs.Create(Repository{Meta: Meta{Name: "R"}, BackendType: "Local", LocalPath: "/tmp/r", Password: "pw"})
 	if err != nil {
-		t.Fatalf("folder store: %v", err)
+		t.Fatalf("create repo: %v", err)
 	}
+
+	fs := newFolderStore(pool)
 	f, err := fs.Create(Folder{Meta: Meta{Name: "Docs"}, Path: "/home/me/docs"})
 	if err != nil {
 		t.Fatalf("create folder: %v", err)
@@ -153,15 +141,12 @@ func TestFolderAndJobStores(t *testing.T) {
 		t.Fatalf("folder path wrong: %+v", f)
 	}
 
-	js, err := loadEntityStore[Job, *Job](filepath.Join(dir, "jobs.json"), "job")
-	if err != nil {
-		t.Fatalf("job store: %v", err)
-	}
-	j, err := js.Create(Job{Meta: Meta{Name: "Nightly"}, FolderID: f.ID, RepositoryID: "repo1"})
+	js := newJobStore(pool)
+	j, err := js.Create(Job{Meta: Meta{Name: "Nightly"}, FolderID: f.ID, RepositoryID: repo.ID})
 	if err != nil {
 		t.Fatalf("create job: %v", err)
 	}
-	if j.FolderID != f.ID || j.RepositoryID != "repo1" {
+	if j.FolderID != f.ID || j.RepositoryID != repo.ID {
 		t.Fatalf("job references wrong: %+v", j)
 	}
 	if j.ResticTag() != "resticweb-job:"+j.ID {

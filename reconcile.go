@@ -35,7 +35,9 @@ func (a *App) Reconcile() {
 	_ = os.RemoveAll(filepath.Join(a.dataDir, "downloads"))
 
 	repoIDs := a.runs.reconcile(reapOrphan)
-	a.runs.prune(maxRunsPerJob)
+	if a.retainRunsPerJob > 0 {
+		a.runs.prune(a.retainRunsPerJob)
+	}
 
 	if !a.runner.Available() {
 		return

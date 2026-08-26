@@ -5,16 +5,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"testing"
 )
 
 func TestAuthSetupLoginAndProtectsAPI(t *testing.T) {
-	app, err := newApp(t.TempDir())
-	if err != nil {
-		t.Fatalf("newApp: %v", err)
-	}
+	app := testApp(t, newResticRunner())
 	h := newServer(app).routes(http.NotFoundHandler())
 
 	// Before setup, protected APIs refuse.
@@ -125,22 +120,12 @@ func TestAuthSetupLoginAndProtectsAPI(t *testing.T) {
 }
 
 func TestAuthPersistsAcrossRestart(t *testing.T) {
-	dir := t.TempDir()
-	app, err := newApp(dir)
-	if err != nil {
-		t.Fatalf("newApp: %v", err)
-	}
+	app := testApp(t, newResticRunner())
 	if err := app.auth.SetupPassword("persisted"); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, authFileName)); err != nil {
-		t.Fatalf("auth file missing: %v", err)
-	}
 
-	app2, err := newApp(dir)
-	if err != nil {
-		t.Fatalf("reopen: %v", err)
-	}
+	app2 := testApp(t, newResticRunner())
 	if !app2.auth.Configured() {
 		t.Fatal("password was not persisted")
 	}

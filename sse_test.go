@@ -94,10 +94,7 @@ func collectSSE(t *testing.T, url, lastEventID string, want func([]sseEvt) bool,
 
 func newSSETestServer(t *testing.T, fake *fakeRunner) (*App, *httptest.Server) {
 	t.Helper()
-	app, err := newAppWithRunner(t.TempDir(), fake)
-	if err != nil {
-		t.Fatalf("newAppWithRunner: %v", err)
-	}
+	app := testApp(t, fake)
 	ts := httptest.NewServer(routesFor(t, app))
 	t.Cleanup(ts.Close)
 	return app, ts

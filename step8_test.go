@@ -28,8 +28,14 @@ func TestInitRunSuccessAndFailure(t *testing.T) {
 
 	// Failure (already initialized).
 	app2 := newRunTestApp(t, &fakeRunner{installed: true, initErr: errWrongPassword})
-	repo2, _ := app2.repos.Create(Repository{Meta: Meta{Name: "r"}, BackendType: "Local", LocalPath: "/tmp/r", Password: "pw"})
-	run2, _ := app2.coord.StartInit(repo2.ID)
+	repo2, err := app2.repos.Create(Repository{Meta: Meta{Name: "r-fail"}, BackendType: "Local", LocalPath: "/tmp/r", Password: "pw"})
+	if err != nil {
+		t.Fatalf("create repo: %v", err)
+	}
+	run2, err := app2.coord.StartInit(repo2.ID)
+	if err != nil {
+		t.Fatalf("StartInit (fail case): %v", err)
+	}
 	f2 := waitForStatus(t, app2.runs, run2.ID, StatusFailed, 2*time.Second)
 	if f2.Error == "" {
 		t.Fatal("failed init should carry an error message")
@@ -84,10 +90,7 @@ func TestDownloadRunAndZip(t *testing.T) {
 			return 0, nil
 		},
 	}
-	app, err := newAppWithRunner(t.TempDir(), fake)
-	if err != nil {
-		t.Fatalf("newAppWithRunner: %v", err)
-	}
+	app := testApp(t, fake)
 	h := routesFor(t, app)
 	ts := httptest.NewServer(h)
 	defer ts.Close()
@@ -133,7 +136,7 @@ func TestDownloadNotReady(t *testing.T) {
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})
 	fake := &fakeRunner{installed: true, streamFn: gatedStream(started, release)}
-	app, _ := newAppWithRunner(t.TempDir(), fake)
+	app := testApp(t, fake)
 	h := routesFor(t, app)
 
 	repo, _ := app.repos.Create(Repository{Meta: Meta{Name: "r"}, BackendType: "Local", LocalPath: "/tmp/r", Password: "pw"})
@@ -151,7 +154,7 @@ func TestDownloadNotReady(t *testing.T) {
 
 func TestJobSnapshotsUseTag(t *testing.T) {
 	fake := &fakeRunner{installed: true, snaps: []Snapshot{{ID: "s1", ShortID: "s1"}}}
-	app, _ := newAppWithRunner(t.TempDir(), fake)
+	app := testApp(t, fake)
 	h := routesFor(t, app)
 	_, jobID := makeJob(t, app, "a", "/data")
 	job, _ := app.jobs.Get(jobID)
@@ -189,13 +192,18 @@ func TestRetentionPrune(t *testing.T) {
 		t.Fatalf("precondition: %d runs, want 5", got)
 	}
 
+	before := app.runs.runsForJob(jobID)
 	app.runs.prune(2)
-	if got := len(app.runs.runsForJob(jobID)); got != 2 {
-		t.Fatalf("after prune(2): %d runs, want 2", got)
+	after := app.runs.runsForJob(jobID)
+	if len(after) != 2 {
+		t.Fatalf("after prune(2): %d runs, want 2", len(after))
 	}
-	// The pruned run directories are gone from disk too.
-	entries, _ := os.ReadDir(filepath.Join(app.dataDir, "runs"))
-	if len(entries) != 2 {
-		t.Fatalf("on-disk run dirs = %d, want 2", len(entries))
+	for _, old := range before[2:] {
+		if _, ok := app.runs.Get(old.ID); ok {
+			t.Fatalf("pruned run %s still present", old.ID)
+		}
+		if _, err := app.runs.ReadLog(old.ID, 0); err == nil {
+			t.Fatalf("pruned run %s still has log lines", old.ID)
+		}
 	}
 }

@@ -5,19 +5,22 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // App is the central container of the server's dependencies: the three entity
 // stores, the run store, the restic runner and the coordinator. Every handler
 // reaches its collaborators through one place.
 type App struct {
-	dataDir string
+	dataDir          string
+	pool             *pgxpool.Pool
+	retainRunsPerJob int
 
-	repos   *EntityStore[Repository, *Repository]
-	folders *EntityStore[Folder, *Folder]
-	jobs    *EntityStore[Job, *Job]
+	repos   *repoStore
+	folders *folderStore
+	jobs    *jobStore
 
 	auth     *AuthStore
 	sessions *SessionManager
@@ -31,54 +34,38 @@ type App struct {
 }
 
 // newApp builds an App backed by the real restic runner.
-func newApp(dataDir string) (*App, error) {
-	return newAppWithRunner(dataDir, newResticRunner())
+func newApp(dataDir string, pool *pgxpool.Pool) (*App, error) {
+	return newAppWithRunner(dataDir, pool, newResticRunner())
 }
 
 // newAppWithRunner builds an App with a caller-supplied Runner, so tests can
 // inject a fake and exercise the whole pipeline with no restic binary.
-func newAppWithRunner(dataDir string, runner Runner) (*App, error) {
+func newAppWithRunner(dataDir string, pool *pgxpool.Pool, runner Runner) (*App, error) {
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return nil, fmt.Errorf("could not create data directory %q: %w", dataDir, err)
 	}
 
-	repos, err := loadEntityStore[Repository, *Repository](filepath.Join(dataDir, "repositories.json"), "repository")
-	if err != nil {
-		return nil, err
-	}
-	folders, err := loadEntityStore[Folder, *Folder](filepath.Join(dataDir, "folders.json"), "folder")
-	if err != nil {
-		return nil, err
-	}
-	jobs, err := loadEntityStore[Job, *Job](filepath.Join(dataDir, "jobs.json"), "job")
-	if err != nil {
-		return nil, err
-	}
-
 	bcast := newBroadcaster()
 	bus := eventBus(bcast)
-	runs, err := newRunStore(filepath.Join(dataDir, "runs"), bus)
-	if err != nil {
-		return nil, err
-	}
-	auth, err := loadAuthStore(filepath.Join(dataDir, authFileName))
+	auth, err := loadAuthStore(pool)
 	if err != nil {
 		return nil, err
 	}
 
 	app := &App{
 		dataDir:  dataDir,
-		repos:    repos,
-		folders:  folders,
-		jobs:     jobs,
+		pool:     pool,
+		repos:    newRepoStore(pool),
+		folders:  newFolderStore(pool),
+		jobs:     newJobStore(pool),
 		auth:     auth,
 		sessions: newSessionManager(),
-		runs:     runs,
+		runs:     newRunStore(pool, bus),
 		runner:   runner,
 		bus:      bus,
 		bcast:    bcast,
 	}
-	app.coord = newCoordinator(app, runs, runner, bus)
+	app.coord = newCoordinator(app, app.runs, runner, bus)
 	app.sched = newScheduler(app)
 	return app, nil
 }

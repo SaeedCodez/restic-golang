@@ -16,6 +16,11 @@
     <string>-data</string>
     <string>/Users/YOUR_USER/Library/Application Support/restic-web/data</string>
   </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>DATABASE_URL</key>
+    <string>postgres://YOUR_USER@127.0.0.1:5432/restic?sslmode=disable</string>
+  </dict>
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>

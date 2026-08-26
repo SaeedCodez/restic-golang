@@ -12,12 +12,11 @@ import (
 // built around four user-managed entities — Repository, Folder, Job — plus a Run
 // (one execution of any long-running operation) and its append-only LogLine
 // stream. Runs and log lines are owned by the RunStore; the three entities are
-// owned by generic EntityStores (see store.go).
+// owned by Postgres-backed stores (see pg_entities.go).
 
 // Meta is the common identity/timestamp block embedded in every user-managed
 // entity. Embedding it flattens id/name/createdAt/updatedAt into the entity's
-// JSON, and its pointer method getMeta lets the generic EntityStore read and
-// stamp any entity uniformly.
+// JSON. getMeta lets stores read and stamp identity fields uniformly.
 type Meta struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`
