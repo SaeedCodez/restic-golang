@@ -13,6 +13,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -25,7 +26,7 @@ var webFiles embed.FS
 func main() {
 	_ = loadDotEnv(".env")
 
-	addr := flag.String("addr", "127.0.0.1:8080", "address to listen on")
+	addr := flag.String("addr", defaultListenAddr(), "address to listen on")
 	configPath := flag.String("config", "config.json", "path to the legacy JSON config file (imported once)")
 	dataDir := flag.String("data", "data", "directory for ephemeral files (download workspaces)")
 	dsnFlag := flag.String("database", "", "Postgres URL (default: DATABASE_URL from the environment or .env)")
@@ -87,4 +88,16 @@ func main() {
 		log.Printf("server stopped: %v", err)
 		os.Exit(1)
 	}
+}
+
+// defaultListenAddr prefers ADDR, then PORT (as 0.0.0.0:PORT for containers),
+// then the local-dev loopback default.
+func defaultListenAddr() string {
+	if a := strings.TrimSpace(os.Getenv("ADDR")); a != "" {
+		return a
+	}
+	if p := strings.TrimSpace(os.Getenv("PORT")); p != "" {
+		return "0.0.0.0:" + p
+	}
+	return "127.0.0.1:8080"
 }

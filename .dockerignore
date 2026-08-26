@@ -1,0 +1,16 @@
+.git
+.env
+.env.*
+!.env.example
+data/
+restic-repo/
+config.json
+restic-web
+ui/node_modules/
+ui/dist/
+docs/
+*.md
+!README.md
+**/*_test.go
+testdb_test.go
+testsupport_test.go
