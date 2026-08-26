@@ -86,6 +86,7 @@ export const Jobs = {
   update: (id, b) => api.put(`/api/jobs/${id}`, b),
   remove: (id) => api.del(`/api/jobs/${id}`),
   run: (id) => api.post(`/api/jobs/${id}/run`),
+  retention: (id) => api.post(`/api/jobs/${id}/retention`),
   runs: (id) => api.get(`/api/jobs/${id}/runs`),
   snapshots: (id) => api.get(`/api/jobs/${id}/snapshots`),
 };

@@ -187,6 +187,9 @@ data/
   Missed slots catch up once after downtime; a busy repository is skipped and
   retried on the next tick. The process must stay running for schedules to fire —
   see [Running as a service](#running-as-a-service).
+- **Snapshot retention.** A job may carry an optional keep-policy. After a
+  successful backup, a separate retention run applies `restic forget --prune`
+  to that job's tagged snapshots only (presets or custom keep rules).
 
 ### Code layout
 
@@ -222,6 +225,7 @@ The UI talks to a plain JSON API, which is usable on its own:
 | `POST /api/auth/password` | change password (requires session) |
 | `GET /api/jobs` | each job carries its `lastRun`, `runCount`, and schedule health (`nextDueAt`, `scheduleState`) |
 | `POST /api/jobs/{id}/run` | `202` with the new run id, or `409` `busy` naming the blocking run |
+| `POST /api/jobs/{id}/retention` | `202` with a forget+prune run; requires retention enabled on the job |
 | `GET /api/runs` | filter with `status` (`active`/`finished`/an exact status), `kind`, `jobId`, `limit`; `total` reports the match count before the limit |
 | `GET /api/runs/{id}/log` | the durable log, `?after=<seq>` for incremental reads |
 | `GET /api/runs/{id}/events` | SSE: run state, progress and log, resumable via `Last-Event-ID` |
@@ -278,6 +282,7 @@ stored choice is applied before first paint, so the page never flashes.
 | Restore         | `restic -r <repo> restore <id> --target <dir> --json`   |
 | Download (zip)  | restore into a temp workspace, then stream a zip        |
 | Unlock          | `restic -r <repo> unlock` (removes only stale locks)    |
+| Retention       | `restic -r <repo> forget --tag … --keep-* --prune --json` |
 
 ## Notes & limitations
 
@@ -289,9 +294,11 @@ stored choice is applied before first paint, so the page never flashes.
   sent to the browser: the API reports only whether a secret is set, and an edit
   that leaves a secret field blank keeps the stored value.
 - Run history is kept until you set `-retain-runs-per-job`. Download workspaces
-  are ephemeral and wiped on startup. Snapshot retention (`forget` / `prune`) is
-  not built in yet — automatic backups will grow the restic repository until you
-  prune outside the app or that lands as a follow-up.
+  are ephemeral and wiped on startup. **Snapshot retention** is optional per
+  job: presets (light / balanced / long) or custom keep-last / hourly / daily /
+  weekly / monthly / within-days rules. After each successful backup (or via
+  **Apply now** on the job page), the app runs `forget --prune` scoped to that
+  job's tag so other jobs sharing the repository are unaffected.
 - A browser cannot hand the server a real local path, so source and target
   folders are entered as absolute-path text fields. A mistyped path surfaces as a
   failed run rather than as validation.

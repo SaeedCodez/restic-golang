@@ -183,14 +183,158 @@ type JobSchedule struct {
 	Weekdays []int  `json:"weekdays,omitempty"` // 0=Sunday … 6=Saturday for weekly
 }
 
+// Retention presets fill keep-* counts. "custom" means the stored numbers are
+// authoritative.
+const (
+	RetentionPresetLight    = "light"
+	RetentionPresetBalanced = "balanced"
+	RetentionPresetLong     = "long"
+	RetentionPresetCustom   = "custom"
+)
+
+// JobRetention is an optional snapshot keep-policy on a Job. When enabled,
+// successful backups are followed by a retention run (`restic forget --prune`)
+// scoped to this job's tag. Missing/nil means off and never configured.
+type JobRetention struct {
+	Enabled bool   `json:"enabled"`
+	Preset  string `json:"preset,omitempty"` // light | balanced | long | custom
+
+	KeepLast       int `json:"keepLast,omitempty"`
+	KeepHourly     int `json:"keepHourly,omitempty"`
+	KeepDaily      int `json:"keepDaily,omitempty"`
+	KeepWeekly     int `json:"keepWeekly,omitempty"`
+	KeepMonthly    int `json:"keepMonthly,omitempty"`
+	KeepWithinDays int `json:"keepWithinDays,omitempty"` // optional; becomes restic --keep-within Nd
+}
+
+// RetentionPresetValues returns the keep counts for a named preset.
+func RetentionPresetValues(preset string) JobRetention {
+	switch preset {
+	case RetentionPresetLight:
+		return JobRetention{Preset: RetentionPresetLight, KeepLast: 24, KeepDaily: 7}
+	case RetentionPresetBalanced:
+		return JobRetention{Preset: RetentionPresetBalanced, KeepLast: 24, KeepDaily: 7, KeepWeekly: 4}
+	case RetentionPresetLong:
+		return JobRetention{Preset: RetentionPresetLong, KeepLast: 48, KeepDaily: 14, KeepWeekly: 8, KeepMonthly: 12}
+	default:
+		return JobRetention{Preset: RetentionPresetCustom}
+	}
+}
+
+// Normalize applies a named preset's counts (custom is left as-is) and trims
+// negative values to zero.
+func (r *JobRetention) Normalize() {
+	if r == nil {
+		return
+	}
+	switch r.Preset {
+	case RetentionPresetLight, RetentionPresetBalanced, RetentionPresetLong:
+		p := RetentionPresetValues(r.Preset)
+		r.KeepLast = p.KeepLast
+		r.KeepHourly = p.KeepHourly
+		r.KeepDaily = p.KeepDaily
+		r.KeepWeekly = p.KeepWeekly
+		r.KeepMonthly = p.KeepMonthly
+		// keepWithinDays is only meaningful on custom
+		r.KeepWithinDays = 0
+	case "", RetentionPresetCustom:
+		if r.Preset == "" {
+			r.Preset = RetentionPresetCustom
+		}
+	}
+	if r.KeepLast < 0 {
+		r.KeepLast = 0
+	}
+	if r.KeepHourly < 0 {
+		r.KeepHourly = 0
+	}
+	if r.KeepDaily < 0 {
+		r.KeepDaily = 0
+	}
+	if r.KeepWeekly < 0 {
+		r.KeepWeekly = 0
+	}
+	if r.KeepMonthly < 0 {
+		r.KeepMonthly = 0
+	}
+	if r.KeepWithinDays < 0 {
+		r.KeepWithinDays = 0
+	}
+}
+
+// HasKeepRule reports whether at least one keep-* / keep-within rule is set.
+func (r *JobRetention) HasKeepRule() bool {
+	if r == nil {
+		return false
+	}
+	return r.KeepLast > 0 || r.KeepHourly > 0 || r.KeepDaily > 0 ||
+		r.KeepWeekly > 0 || r.KeepMonthly > 0 || r.KeepWithinDays > 0
+}
+
+// Validate checks that an enabled retention policy is usable. Disabled policies
+// are always valid (config may be kept while paused).
+func (r *JobRetention) Validate() error {
+	if r == nil || !r.Enabled {
+		return nil
+	}
+	switch r.Preset {
+	case RetentionPresetLight, RetentionPresetBalanced, RetentionPresetLong, RetentionPresetCustom, "":
+	default:
+		return errors.New(`retention preset must be "light", "balanced", "long", or "custom"`)
+	}
+	r.Normalize()
+	if !r.HasKeepRule() {
+		return errors.New("retention needs at least one keep rule (last, hourly, daily, weekly, monthly, or within days)")
+	}
+	if r.KeepWithinDays > 36500 {
+		return errors.New("keep within days is too large")
+	}
+	const maxKeep = 100000
+	for _, n := range []int{r.KeepLast, r.KeepHourly, r.KeepDaily, r.KeepWeekly, r.KeepMonthly} {
+		if n > maxKeep {
+			return errors.New("a keep count is too large")
+		}
+	}
+	return nil
+}
+
+// Describe returns a short human label, e.g. "last 24, 7 daily, 4 weekly".
+func (r *JobRetention) Describe() string {
+	if r == nil {
+		return ""
+	}
+	parts := make([]string, 0, 6)
+	if r.KeepLast > 0 {
+		parts = append(parts, "last "+strconv.Itoa(r.KeepLast))
+	}
+	if r.KeepHourly > 0 {
+		parts = append(parts, strconv.Itoa(r.KeepHourly)+" hourly")
+	}
+	if r.KeepDaily > 0 {
+		parts = append(parts, strconv.Itoa(r.KeepDaily)+" daily")
+	}
+	if r.KeepWeekly > 0 {
+		parts = append(parts, strconv.Itoa(r.KeepWeekly)+" weekly")
+	}
+	if r.KeepMonthly > 0 {
+		parts = append(parts, strconv.Itoa(r.KeepMonthly)+" monthly")
+	}
+	if r.KeepWithinDays > 0 {
+		parts = append(parts, "within "+strconv.Itoa(r.KeepWithinDays)+"d")
+	}
+	return strings.Join(parts, ", ")
+}
+
 // Job is the core concept: a saved, named pairing of one Folder and one
 // Repository. It is the thing the user runs, views and returns to. An optional
 // Schedule makes the same job fire automatically while the process is running.
+// An optional Retention policy forgets old snapshots for this job after backups.
 type Job struct {
 	Meta
-	FolderID     string       `json:"folderId"`
-	RepositoryID string       `json:"repositoryId"`
-	Schedule     *JobSchedule `json:"schedule,omitempty"`
+	FolderID     string        `json:"folderId"`
+	RepositoryID string        `json:"repositoryId"`
+	Schedule     *JobSchedule  `json:"schedule,omitempty"`
+	Retention    *JobRetention `json:"retention,omitempty"`
 }
 
 // ResticTag is the immutable per-job restic tag stamped on every snapshot this
@@ -200,7 +344,7 @@ type Job struct {
 func (j *Job) ResticTag() string { return "resticweb-job:" + j.ID }
 
 // Validate checks that the job names a folder and a repository, and that any
-// attached schedule is well-formed.
+// attached schedule or retention policy is well-formed.
 func (j *Job) Validate() error {
 	if strings.TrimSpace(j.Name) == "" {
 		return errors.New("a job name is required")
@@ -213,6 +357,11 @@ func (j *Job) Validate() error {
 	}
 	if j.Schedule != nil {
 		if err := j.Schedule.Validate(); err != nil {
+			return err
+		}
+	}
+	if j.Retention != nil {
+		if err := j.Retention.Validate(); err != nil {
 			return err
 		}
 	}
@@ -333,12 +482,16 @@ func (s *JobSchedule) Describe() string {
 type RunKind string
 
 const (
-	KindBackup   RunKind = "backup"
-	KindRestore  RunKind = "restore"
-	KindInit     RunKind = "init"
-	KindDownload RunKind = "download"
-	KindUnlock   RunKind = "unlock"
+	KindBackup    RunKind = "backup"
+	KindRestore   RunKind = "restore"
+	KindInit      RunKind = "init"
+	KindDownload  RunKind = "download"
+	KindUnlock    RunKind = "unlock"
+	KindRetention RunKind = "retention"
 )
+
+// TriggerAfterBackup marks a retention run started after a successful backup.
+const TriggerAfterBackup = "after_backup"
 
 // RunStatus is the lifecycle state of a Run. The durable Run record is the sole
 // source of truth for whether an operation is running; a fresh process never

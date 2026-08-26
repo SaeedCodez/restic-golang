@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -257,8 +258,24 @@ func (c *Coordinator) startRun(repo Repository, run *Run, exec runExec) (*Run, e
 }
 
 // drive runs the operation to completion and records its terminal state.
+// Successful backups may chain a retention run after the repository slot is
+// released.
 func (c *Coordinator) drive(ctx context.Context, ar *activeRun, exec runExec) {
-	defer c.finish(ar)
+	var chainRetentionJob string
+	defer func() {
+		c.finish(ar)
+		if chainRetentionJob != "" {
+			if _, err := c.StartRetention(chainRetentionJob, TriggerAfterBackup); err != nil {
+				var busy *BusyError
+				if errors.As(err, &busy) {
+					// Another operation grabbed the repo; the next successful
+					// backup will apply retention.
+					return
+				}
+				log.Printf("retention: could not start after backup for job %s: %v", chainRetentionJob, err)
+			}
+		}
+	}()
 
 	ar.handle.setStatus(StatusRunning)
 	code, err := exec(ctx, ar.handle)
@@ -269,6 +286,58 @@ func (c *Coordinator) drive(ctx context.Context, ar *activeRun, exec runExec) {
 	}
 	ar.handle.Log(logLevelFor(status), "system", terminalMessage(status))
 	ar.handle.finalize(status, code, errMsg)
+
+	if ar.kind == KindBackup && (status == StatusSuccess || status == StatusSuccessWarnings) {
+		if run, ok := c.store.Get(ar.runID); ok && run.JobID != "" {
+			if job, ok := c.app.jobs.Get(run.JobID); ok && job.Retention != nil && job.Retention.Enabled {
+				chainRetentionJob = run.JobID
+			}
+		}
+	}
+}
+
+// StartRetention starts a forget+prune run for a job's tagged snapshots.
+func (c *Coordinator) StartRetention(jobID, trigger string) (*Run, error) {
+	if trigger == "" {
+		trigger = TriggerManual
+	}
+	job, _, repo, err := c.app.resolveJob(jobID)
+	if err != nil {
+		return nil, err
+	}
+	if job.Retention == nil || !job.Retention.Enabled {
+		return nil, validf("retention is not enabled for this job")
+	}
+	policy := *job.Retention
+	if err := policy.Validate(); err != nil {
+		return nil, validf("%s", err.Error())
+	}
+	tag := job.ResticTag()
+	desc := policy.Describe()
+	run := &Run{
+		Kind:         KindRetention,
+		Status:       StatusStarting,
+		JobID:        job.ID,
+		RepositoryID: repo.ID,
+		JobName:      job.Name,
+		RepoName:     repo.Name,
+		Params: map[string]string{
+			"tag":     tag,
+			"trigger": trigger,
+			"policy":  desc,
+			"preset":  policy.Preset,
+		},
+	}
+	return c.startRun(repo, run, func(ctx context.Context, h *runHandle) (int, error) {
+		switch trigger {
+		case TriggerAfterBackup:
+			h.Log("info", "system", "Applying retention after backup ("+desc+").")
+		default:
+			h.Log("info", "system", "Applying retention ("+desc+").")
+		}
+		h.Log("info", "system", fmt.Sprintf("Forgetting old snapshots tagged %s in repository %q", tag, repo.Name))
+		return c.runner.Forget(ctx, &repo, tag, policy, h)
+	})
 }
 
 // errRunNotActive means a stop was requested for a run that is not currently

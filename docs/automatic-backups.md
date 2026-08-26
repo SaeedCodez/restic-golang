@@ -247,12 +247,12 @@ the existing fake `Runner`.
 
 These are real production needs, but they are different features:
 
-1. **`forget` + `prune` retention.** Automatic backups without retention will
-   grow the repository forever. Next feature after this: a keep-policy on the
-   job (`last 7 / daily 30 / weekly 12 / monthly 12`) as a new `RunKind`, run
-   after a successful backup. Do not mix it into the scheduler’s first cut —
-   it is a destructive restic operation and needs its own run, log, and
-   confirmation UX.
+1. **`forget` + `prune` retention.** Implemented as an optional keep-policy on
+   the job (presets light / balanced / long, or custom keep-last / hourly /
+   daily / weekly / monthly / within-days). After a successful backup — or via
+   **Apply now** with confirmation — a `KindRetention` run runs
+   `restic forget --tag resticweb-job:<id> --keep-* --prune`, so only that
+   job’s snapshots are considered.
 2. **Notifications / email / ntfy.** The overdue badge is enough for a
    localhost app.
 3. **Cron expressions, multiple schedules per job, file-watch/continuous

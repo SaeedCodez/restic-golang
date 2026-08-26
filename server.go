@@ -64,6 +64,7 @@ func (s *Server) routes(static http.Handler) http.Handler {
 
 	// Runs: every long-running operation is a run, watched the same way.
 	mux.HandleFunc("POST /api/jobs/{id}/run", s.handleJobRun)
+	mux.HandleFunc("POST /api/jobs/{id}/retention", s.handleJobRetention)
 	mux.HandleFunc("GET /api/jobs/{id}/runs", s.handleJobRuns)
 	mux.HandleFunc("GET /api/runs", s.handleRunList)
 	mux.HandleFunc("GET /api/runs/{id}", s.handleRunGet)

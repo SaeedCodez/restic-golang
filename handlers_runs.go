@@ -39,6 +39,18 @@ func (s *Server) handleJobRun(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "runId": run.ID, "run": run})
 }
 
+func (s *Server) handleJobRetention(w http.ResponseWriter, r *http.Request) {
+	if !s.requireRestic(w) {
+		return
+	}
+	run, err := s.app.coord.StartRetention(r.PathValue("id"), TriggerManual)
+	if err != nil {
+		writeStartError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "runId": run.ID, "run": run})
+}
+
 func (s *Server) handleJobRuns(w http.ResponseWriter, r *http.Request) {
 	if !s.app.jobs.Exists(r.PathValue("id")) {
 		errorJSON(w, http.StatusNotFound, "not_found", "job not found")

@@ -69,12 +69,18 @@ type fakeRunner struct {
 	// restic writing files there (used to exercise the download zip).
 	onRestore func(target string)
 
-	// streamFn drives Backup/Restore. If nil, the op succeeds immediately.
+	// streamFn drives Backup/Restore/Forget. If nil, the op succeeds immediately.
 	streamFn func(ctx context.Context, kind RunKind, sink RunSink) (int, error)
 
-	mu        sync.Mutex
-	snapTags  []string // tags passed to Snapshots, for assertions
-	initCount int      // number of Init calls, for assertions
+	mu          sync.Mutex
+	snapTags    []string // tags passed to Snapshots, for assertions
+	initCount   int      // number of Init calls, for assertions
+	forgetCalls []forgetCall
+}
+
+type forgetCall struct {
+	Tag    string
+	Policy JobRetention
 }
 
 func (f *fakeRunner) recordedTags() []string {
@@ -128,6 +134,24 @@ func (f *fakeRunner) Restore(ctx context.Context, repo *Repository, snapshotID, 
 		return f.streamFn(ctx, KindRestore, sink)
 	}
 	return 0, nil
+}
+
+func (f *fakeRunner) Forget(ctx context.Context, repo *Repository, tag string, policy JobRetention, sink RunSink) (int, error) {
+	sink.PID(4242, "faketoken")
+	f.mu.Lock()
+	f.forgetCalls = append(f.forgetCalls, forgetCall{Tag: tag, Policy: policy})
+	f.mu.Unlock()
+	if f.streamFn != nil {
+		return f.streamFn(ctx, KindRetention, sink)
+	}
+	sink.Log("info", "stdout", "fake forget applied")
+	return 0, nil
+}
+
+func (f *fakeRunner) recordedForgets() []forgetCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]forgetCall(nil), f.forgetCalls...)
 }
 
 // gatedStream is a streamFn that emits an initial log + progress line, signals

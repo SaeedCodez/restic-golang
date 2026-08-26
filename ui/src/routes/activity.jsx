@@ -23,6 +23,7 @@ const HISTORY_LIMIT = 40;
 const KIND_FILTERS = [
   { value: "all", label: "All operations" },
   { value: "backup", label: "Backups" },
+  { value: "retention", label: "Retention" },
   { value: "restore", label: "Restores" },
   { value: "download", label: "Downloads" },
   { value: "init", label: "Initializations" },

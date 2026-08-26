@@ -56,6 +56,7 @@ export function ScheduleEditor({ job, onSaved }) {
       folderId: job.folderId,
       repositoryId: job.repositoryId,
       schedule,
+      retention: job.retention || null,
     });
     setBusy(false);
     if (res.ok) {

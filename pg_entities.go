@@ -300,12 +300,13 @@ type jobStore struct {
 
 func newJobStore(pool *pgxpool.Pool) *jobStore { return &jobStore{pool: pool} }
 
-const jobCols = `id, name, created_at, updated_at, folder_id, repository_id, schedule`
+const jobCols = `id, name, created_at, updated_at, folder_id, repository_id, schedule, retention`
 
 func scanJob(row interface{ Scan(dest ...any) error }) (Job, error) {
 	var j Job
 	var sched []byte
-	err := row.Scan(&j.ID, &j.Name, &j.CreatedAt, &j.UpdatedAt, &j.FolderID, &j.RepositoryID, &sched)
+	var ret []byte
+	err := row.Scan(&j.ID, &j.Name, &j.CreatedAt, &j.UpdatedAt, &j.FolderID, &j.RepositoryID, &sched, &ret)
 	if err != nil {
 		return Job{}, err
 	}
@@ -313,6 +314,12 @@ func scanJob(row interface{ Scan(dest ...any) error }) (Job, error) {
 		var s JobSchedule
 		if json.Unmarshal(sched, &s) == nil {
 			j.Schedule = &s
+		}
+	}
+	if len(ret) > 0 {
+		var r JobRetention
+		if json.Unmarshal(ret, &r) == nil {
+			j.Retention = &r
 		}
 	}
 	return j, nil
@@ -369,8 +376,12 @@ func (s *jobStore) Create(item Job) (Job, error) {
 	item.UpdatedAt = now
 	ctx, cancel := dbCtx()
 	defer cancel()
-	_, err = s.pool.Exec(ctx, `INSERT INTO jobs (`+jobCols+`) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-		item.ID, item.Name, item.CreatedAt, item.UpdatedAt, item.FolderID, item.RepositoryID, scheduleJSON(item.Schedule))
+	if item.Retention != nil {
+		_ = item.Retention.Validate() // normalize preset counts when valid/disabled
+	}
+	_, err = s.pool.Exec(ctx, `INSERT INTO jobs (`+jobCols+`) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+		item.ID, item.Name, item.CreatedAt, item.UpdatedAt, item.FolderID, item.RepositoryID,
+		scheduleJSON(item.Schedule), retentionJSON(item.Retention))
 	if err != nil {
 		if isUniqueViolation(err) {
 			return zero, conflictf("a job named %q already exists", name)
@@ -397,11 +408,15 @@ func (s *jobStore) Update(id string, item Job) (Job, error) {
 	item.Name = name
 	item.CreatedAt = prev.CreatedAt
 	item.UpdatedAt = time.Now().UTC()
+	if item.Retention != nil {
+		_ = item.Retention.Validate()
+	}
 	ctx, cancel := dbCtx()
 	defer cancel()
 	tag, err := s.pool.Exec(ctx, `UPDATE jobs SET
-		name=$2, updated_at=$3, folder_id=$4, repository_id=$5, schedule=$6 WHERE id=$1`,
-		item.ID, item.Name, item.UpdatedAt, item.FolderID, item.RepositoryID, scheduleJSON(item.Schedule))
+		name=$2, updated_at=$3, folder_id=$4, repository_id=$5, schedule=$6, retention=$7 WHERE id=$1`,
+		item.ID, item.Name, item.UpdatedAt, item.FolderID, item.RepositoryID,
+		scheduleJSON(item.Schedule), retentionJSON(item.Retention))
 	if err != nil {
 		if isUniqueViolation(err) {
 			return zero, conflictf("a job named %q already exists", name)
@@ -475,6 +490,17 @@ func scheduleJSON(s *JobSchedule) any {
 		return nil
 	}
 	b, err := json.Marshal(s)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
+func retentionJSON(r *JobRetention) any {
+	if r == nil {
+		return nil
+	}
+	b, err := json.Marshal(r)
 	if err != nil {
 		return nil
 	}

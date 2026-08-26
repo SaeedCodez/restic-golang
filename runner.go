@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -49,6 +50,9 @@ type Runner interface {
 	Backup(ctx context.Context, repo *Repository, source string, tags []string, sink RunSink) (int, error)
 	// Restore streams a restore of snapshotID into target, returning the exit code.
 	Restore(ctx context.Context, repo *Repository, snapshotID, target string, sink RunSink) (int, error)
+	// Forget applies a keep-policy to snapshots with the given tag, then prunes
+	// unreferenced data (`restic forget --prune`). Returns restic's exit code.
+	Forget(ctx context.Context, repo *Repository, tag string, policy JobRetention, sink RunSink) (int, error)
 }
 
 // resticRunner is the real Runner: it shells out to the restic CLI.
@@ -164,6 +168,45 @@ func (*resticRunner) Backup(ctx context.Context, repo *Repository, source string
 
 func (*resticRunner) Restore(ctx context.Context, repo *Repository, snapshotID, target string, sink RunSink) (int, error) {
 	return streamRestic(ctx, repo, KindRestore, sink, "restore", snapshotID, "--target", target, "--json")
+}
+
+func (*resticRunner) Forget(ctx context.Context, repo *Repository, tag string, policy JobRetention, sink RunSink) (int, error) {
+	args, err := forgetArgs(tag, policy)
+	if err != nil {
+		return -1, err
+	}
+	return streamRestic(ctx, repo, KindRetention, sink, args...)
+}
+
+// forgetArgs builds `restic forget --prune` arguments for a job-scoped policy.
+func forgetArgs(tag string, policy JobRetention) ([]string, error) {
+	policy.Normalize()
+	if strings.TrimSpace(tag) == "" {
+		return nil, fmt.Errorf("a job tag is required for retention")
+	}
+	if !policy.HasKeepRule() {
+		return nil, fmt.Errorf("retention needs at least one keep rule")
+	}
+	args := []string{"forget", "--json", "--prune", "--tag", tag}
+	if policy.KeepLast > 0 {
+		args = append(args, "--keep-last", strconv.Itoa(policy.KeepLast))
+	}
+	if policy.KeepHourly > 0 {
+		args = append(args, "--keep-hourly", strconv.Itoa(policy.KeepHourly))
+	}
+	if policy.KeepDaily > 0 {
+		args = append(args, "--keep-daily", strconv.Itoa(policy.KeepDaily))
+	}
+	if policy.KeepWeekly > 0 {
+		args = append(args, "--keep-weekly", strconv.Itoa(policy.KeepWeekly))
+	}
+	if policy.KeepMonthly > 0 {
+		args = append(args, "--keep-monthly", strconv.Itoa(policy.KeepMonthly))
+	}
+	if policy.KeepWithinDays > 0 {
+		args = append(args, "--keep-within", strconv.Itoa(policy.KeepWithinDays)+"d")
+	}
+	return args, nil
 }
 
 // streamRestic runs a restic command that emits --json progress, forwarding
