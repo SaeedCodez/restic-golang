@@ -273,7 +273,7 @@ Ship (or document) a launchd plist / systemd unit that:
 
 Other production gaps **not** bundled into this feature: plaintext secrets in
 `data/` (the README already flags this; there is a single choke point to
-encrypt later), and no auth (acceptable while bound to localhost).
+encrypt later). App login is password-gated (set on first open).
 
 ---
 

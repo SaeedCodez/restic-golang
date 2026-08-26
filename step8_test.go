@@ -88,7 +88,7 @@ func TestDownloadRunAndZip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newAppWithRunner: %v", err)
 	}
-	h := newServer(app).routes(http.NotFoundHandler())
+	h := routesFor(t, app)
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -134,7 +134,7 @@ func TestDownloadNotReady(t *testing.T) {
 	release := make(chan struct{})
 	fake := &fakeRunner{installed: true, streamFn: gatedStream(started, release)}
 	app, _ := newAppWithRunner(t.TempDir(), fake)
-	h := newServer(app).routes(http.NotFoundHandler())
+	h := routesFor(t, app)
 
 	repo, _ := app.repos.Create(Repository{Meta: Meta{Name: "r"}, BackendType: "Local", LocalPath: "/tmp/r", Password: "pw"})
 	run, _ := app.coord.StartDownload(repo.ID, "snap1")
@@ -152,7 +152,7 @@ func TestDownloadNotReady(t *testing.T) {
 func TestJobSnapshotsUseTag(t *testing.T) {
 	fake := &fakeRunner{installed: true, snaps: []Snapshot{{ID: "s1", ShortID: "s1"}}}
 	app, _ := newAppWithRunner(t.TempDir(), fake)
-	h := newServer(app).routes(http.NotFoundHandler())
+	h := routesFor(t, app)
 	_, jobID := makeJob(t, app, "a", "/data")
 	job, _ := app.jobs.Get(jobID)
 

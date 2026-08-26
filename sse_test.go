@@ -98,7 +98,7 @@ func newSSETestServer(t *testing.T, fake *fakeRunner) (*App, *httptest.Server) {
 	if err != nil {
 		t.Fatalf("newAppWithRunner: %v", err)
 	}
-	ts := httptest.NewServer(newServer(app).routes(http.NotFoundHandler()))
+	ts := httptest.NewServer(routesFor(t, app))
 	t.Cleanup(ts.Close)
 	return app, ts
 }

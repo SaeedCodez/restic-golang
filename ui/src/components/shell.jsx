@@ -1,4 +1,4 @@
-import { Link, NavLink, Outlet } from "react-router-dom";
+import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
   Activity,
   Check,
@@ -6,9 +6,11 @@ import {
   FolderOpen,
   HardDrive,
   Loader2,
+  LogOut,
   Monitor,
   Moon,
   Play,
+  Settings,
   Sun,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -16,9 +18,11 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useAuth } from "@/lib/auth";
 import { useLive } from "@/lib/live";
 import { useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
@@ -154,6 +158,36 @@ function ThemeToggle() {
   );
 }
 
+function AccountMenu() {
+  const { logout } = useAuth();
+  const navigate = useNavigate();
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="icon-sm" aria-label="Account and settings">
+          <Settings className="size-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem onSelect={() => navigate("/settings")}>
+          <Settings className="size-4" />
+          Settings
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          onSelect={async () => {
+            await logout();
+            navigate("/login", { replace: true });
+          }}
+        >
+          <LogOut className="size-4" />
+          Log out
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 /** ResticBanner is the one blocking problem worth interrupting for. */
 function ResticBanner() {
   const { status } = useLive();
@@ -193,6 +227,7 @@ export function Shell() {
             <ActivityIndicator />
             <ResticStatus />
             <ThemeToggle />
+            <AccountMenu />
           </div>
         </div>
         <div className="border-t border-border lg:hidden">
@@ -210,7 +245,7 @@ export function Shell() {
 
       <footer className="border-t border-border">
         <div className="mx-auto w-full max-w-5xl px-5 py-4 text-xs text-muted-foreground sm:px-8">
-          Single-user local tool · no authentication · the backup engine is{" "}
+          Single-user local tool · password-protected · the backup engine is{" "}
           <code className="font-mono">restic</code>
         </div>
       </footer>

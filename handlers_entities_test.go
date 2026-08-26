@@ -10,14 +10,37 @@ import (
 )
 
 // testServer builds a Server backed by a fresh temp data dir and returns its
-// HTTP handler.
+// HTTP handler, already authenticated for API calls.
 func testServer(t *testing.T) http.Handler {
 	t.Helper()
 	app, err := newApp(t.TempDir())
 	if err != nil {
 		t.Fatalf("newApp: %v", err)
 	}
-	return newServer(app).routes(http.NotFoundHandler())
+	return routesFor(t, app)
+}
+
+// routesFor returns the app's HTTP handler with a test session cookie injected
+// on every request, so existing API tests stay focused on their own behaviour.
+func routesFor(t *testing.T, app *App) http.Handler {
+	t.Helper()
+	if !app.auth.Configured() {
+		if err := app.auth.SetupPassword("test-password"); err != nil {
+			t.Fatalf("setup test auth: %v", err)
+		}
+	}
+	token, err := app.sessions.Create()
+	if err != nil {
+		t.Fatalf("create test session: %v", err)
+	}
+	inner := newServer(app).routes(http.NotFoundHandler())
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := r.Cookie(sessionCookieName); err != nil {
+			r = r.Clone(r.Context())
+			r.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
+		}
+		inner.ServeHTTP(w, r)
+	})
 }
 
 // doJSON performs an HTTP request with an optional JSON body and decodes the

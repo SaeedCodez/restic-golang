@@ -5,7 +5,7 @@
  * UI reacts to `code` (e.g. "busy", "not_initialized", "no_restic").
  */
 async function req(method, url, body) {
-  const opt = { method, headers: {} };
+  const opt = { method, headers: {}, credentials: "same-origin" };
   if (body !== undefined) {
     opt.headers["Content-Type"] = "application/json";
     opt.body = JSON.stringify(body);
@@ -46,6 +46,15 @@ export function errorOf(res, fallback = "Something went wrong.") {
 
 export const Status = {
   get: () => api.get("/api/status"),
+};
+
+export const Auth = {
+  status: () => api.get("/api/auth/status"),
+  setup: (password) => api.post("/api/auth/setup", { password }),
+  login: (password) => api.post("/api/auth/login", { password }),
+  logout: () => api.post("/api/auth/logout"),
+  changePassword: (currentPassword, newPassword) =>
+    api.post("/api/auth/password", { currentPassword, newPassword }),
 };
 
 export const Repositories = {

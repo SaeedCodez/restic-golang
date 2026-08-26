@@ -20,8 +20,9 @@ running (with live progress and log) after a refresh, a second tab, or an hour
 away; and if the app is killed mid-backup it never comes back claiming something
 is still running.
 
-This is a single-user tool meant to run on your own machine, so there is no
-authentication.
+This is a single-user tool meant to run on your own machine. On first open you
+set a login password; afterwards the UI asks for it on each session, and you can
+change it later from Settings.
 
 ---
 
@@ -77,7 +78,11 @@ A few things worth knowing from the screenshots above:
 go run .
 ```
 
-Then open the printed URL (default `http://127.0.0.1:8080`). Flags:
+Then open the printed URL (default `http://127.0.0.1:8080`). On first open the
+app asks you to choose a login password; later visits show the login page, and
+you can change the password under Settings.
+
+Flags:
 
 ```sh
 go run . -addr 127.0.0.1:9000 -data ./data
@@ -193,6 +198,10 @@ The UI talks to a plain JSON API, which is usable on its own:
 
 | Endpoint | Notes |
 | --- | --- |
+| `GET /api/auth/status` | public; `{ setupRequired, authenticated }` for the login gate |
+| `POST /api/auth/setup` | public once; sets the login password on first open and starts a session |
+| `POST /api/auth/login` | public; `{ password }` → HttpOnly session cookie |
+| `POST /api/auth/password` | change password (requires session) |
 | `GET /api/jobs` | each job carries its `lastRun`, `runCount`, and schedule health (`nextDueAt`, `scheduleState`) |
 | `POST /api/jobs/{id}/run` | `202` with the new run id, or `409` `busy` naming the blocking run |
 | `GET /api/runs` | filter with `status` (`active`/`finished`/an exact status), `kind`, `jobId`, `limit`; `total` reports the match count before the limit |
@@ -200,6 +209,8 @@ The UI talks to a plain JSON API, which is usable on its own:
 | `GET /api/runs/{id}/events` | SSE: run state, progress and log, resumable via `Last-Event-ID` |
 | `GET /api/events` | SSE: run-level state changes across the app |
 | `GET /api/repositories` | secrets are omitted; `hasPassword` / `hasSecretKey` report whether one is set |
+
+Every other `/api/*` route requires the session cookie from setup or login.
 
 ## Working on the UI
 
@@ -252,6 +263,9 @@ stored choice is applied before first paint, so the page never flashes.
 
 ## Notes & limitations
 
+- The **login password** is stored as a PBKDF2-SHA256 hash in `data/auth.json`
+  (`0600`). Sessions are in-memory cookies — restarting the app means logging in
+  again.
 - Secrets (repository passwords, S3 secret keys) are stored **in plaintext** in
   the data directory (files are `0600`). Fine for a local single-user tool; not
   for shared or production use. They are read through a single choke point, so

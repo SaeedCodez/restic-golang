@@ -84,7 +84,7 @@ func TestStopHTTPEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newAppWithRunner: %v", err)
 	}
-	h := newServer(app).routes(http.NotFoundHandler())
+	h := routesFor(t, app)
 
 	_, jobID := makeJob(t, app, "a", "/data")
 	run, _ := app.coord.StartBackup(jobID)

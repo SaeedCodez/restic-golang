@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Server holds the shared state for all HTTP handlers: everything lives on App.
@@ -21,8 +22,16 @@ func newServer(app *App) *Server {
 
 // routes registers every endpoint on a fresh mux. Static UI files are served
 // from the embedded filesystem; everything under /api is handled here.
+// API routes (except auth setup/login/status) require a valid session cookie.
 func (s *Server) routes(static http.Handler) http.Handler {
 	mux := http.NewServeMux()
+
+	// Auth: status/setup/login are public; password change and logout need a session.
+	mux.HandleFunc("GET /api/auth/status", s.handleAuthStatus)
+	mux.HandleFunc("POST /api/auth/setup", s.handleAuthSetup)
+	mux.HandleFunc("POST /api/auth/login", s.handleAuthLogin)
+	mux.HandleFunc("POST /api/auth/logout", s.handleAuthLogout)
+	mux.HandleFunc("POST /api/auth/password", s.handleAuthChangePassword)
 
 	// App-wide status.
 	mux.HandleFunc("GET /api/status", s.handleStatus)
@@ -68,7 +77,37 @@ func (s *Server) routes(static http.Handler) http.Handler {
 
 	// Everything else is the single-page UI.
 	mux.Handle("/", static)
-	return mux
+	return s.requireAuth(mux)
+}
+
+// publicAPIPaths do not require a session cookie.
+var publicAPIPaths = map[string]bool{
+	"/api/auth/status": true,
+	"/api/auth/setup":  true,
+	"/api/auth/login":  true,
+	"/api/auth/logout": true,
+}
+
+// requireAuth gates /api/* behind a configured password and a valid session.
+// The embedded UI itself stays public so the login and setup pages can load.
+func (s *Server) requireAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if !strings.HasPrefix(path, "/api/") || publicAPIPaths[path] {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if !s.app.auth.Configured() {
+			errorJSON(w, http.StatusUnauthorized, "setup_required",
+				"Set a login password on the setup page before using the app.")
+			return
+		}
+		if !s.app.sessions.Valid(sessionToken(r)) {
+			errorJSON(w, http.StatusUnauthorized, "unauthorized", "Please log in.")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // ---- small helpers ---------------------------------------------------------

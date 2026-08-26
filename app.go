@@ -19,6 +19,9 @@ type App struct {
 	folders *EntityStore[Folder, *Folder]
 	jobs    *EntityStore[Job, *Job]
 
+	auth     *AuthStore
+	sessions *SessionManager
+
 	runs   *RunStore
 	runner Runner
 	bus    eventBus
@@ -58,8 +61,23 @@ func newAppWithRunner(dataDir string, runner Runner) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	auth, err := loadAuthStore(filepath.Join(dataDir, authFileName))
+	if err != nil {
+		return nil, err
+	}
 
-	app := &App{dataDir: dataDir, repos: repos, folders: folders, jobs: jobs, runs: runs, runner: runner, bus: bus, bcast: bcast}
+	app := &App{
+		dataDir:  dataDir,
+		repos:    repos,
+		folders:  folders,
+		jobs:     jobs,
+		auth:     auth,
+		sessions: newSessionManager(),
+		runs:     runs,
+		runner:   runner,
+		bus:      bus,
+		bcast:    bcast,
+	}
 	app.coord = newCoordinator(app, runs, runner, bus)
 	app.sched = newScheduler(app)
 	return app, nil

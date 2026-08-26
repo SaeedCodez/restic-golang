@@ -66,7 +66,7 @@ func TestRepositoryUpdateKeepsOmittedSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newApp: %v", err)
 	}
-	h := newServer(app).routes(http.NotFoundHandler())
+	h := routesFor(t, app)
 
 	repo, err := app.repos.Create(Repository{
 		Meta: Meta{Name: "S3"}, BackendType: "S3", Endpoint: "https://s3.example.com",
@@ -111,7 +111,7 @@ func TestRepositoryUpdateKeepsOmittedSecrets(t *testing.T) {
 func TestJobViewCarriesLastRun(t *testing.T) {
 	fake := &fakeRunner{installed: true}
 	app := newRunTestApp(t, fake)
-	h := newServer(app).routes(http.NotFoundHandler())
+	h := routesFor(t, app)
 	_, jobID := makeJob(t, app, "nightly", "/data")
 
 	// Before any run, the job reports no history at all.
@@ -167,7 +167,7 @@ func TestJobViewCarriesLastRun(t *testing.T) {
 func TestJobScheduleInView(t *testing.T) {
 	fake := &fakeRunner{installed: true}
 	app := newRunTestApp(t, fake)
-	h := newServer(app).routes(http.NotFoundHandler())
+	h := routesFor(t, app)
 	_, jobID := makeJob(t, app, "sched-view", "/data")
 
 	job, _ := app.jobs.Get(jobID)
@@ -209,7 +209,7 @@ func TestJobScheduleInView(t *testing.T) {
 func TestRunListFiltersAndLimit(t *testing.T) {
 	fake := &fakeRunner{installed: true, testResult: TestResult{OK: true}}
 	app := newRunTestApp(t, fake)
-	h := newServer(app).routes(http.NotFoundHandler())
+	h := routesFor(t, app)
 	_, jobID := makeJob(t, app, "nightly", "/data")
 
 	// Two backups and one init, so kind/status filtering has something to bite on.
@@ -277,7 +277,7 @@ func TestRunListFiltersAndLimit(t *testing.T) {
 func TestJobRunsRespectsLimit(t *testing.T) {
 	fake := &fakeRunner{installed: true}
 	app := newRunTestApp(t, fake)
-	h := newServer(app).routes(http.NotFoundHandler())
+	h := routesFor(t, app)
 	_, jobID := makeJob(t, app, "nightly", "/data")
 
 	for i := 0; i < 3; i++ {
