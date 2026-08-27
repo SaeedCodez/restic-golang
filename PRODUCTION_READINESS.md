@@ -1,13 +1,13 @@
 # Production readiness — restic-web
 
 Date: 2026-08-27  
-Environment: Docker Compose on macOS (Apple Silicon), Local restic backend, disposable fixtures under `/app/data/e2e-*` inside the app container.
+Environment: Docker Compose on macOS (Apple Silicon), Local restic backend plus MinIO S3-compatible backend, disposable fixtures under `/app/data/e2e-*` inside the app container.
 
 ## 1. Summary
 
 **Verdict: ready for single-user local / self-hosted use**, with the caveats below.
 
-Core backup → incremental → restore → download, auth, contention, schedules, Docker health, CLI operator path, and mid-run restart reconciliation all worked end-to-end against a real restic repository in this pass. Several clear bugs were found and fixed (see §2). Remaining issues are mostly hardening, documentation drift, or product choices — not silent data-loss paths in the flows exercised.
+Core backup → incremental → restore → download, auth, contention, schedules, Docker health, CLI operator path, and mid-run restart reconciliation all worked end-to-end against a real restic repository in this pass. **S3-compatible (MinIO on Docker) was also verified**: auto-init, backup, incremental, restore, and `repo test` succeeded. Several clear bugs were found and fixed (see §2). Remaining issues are mostly hardening, documentation drift, or product choices — not silent data-loss paths in the flows exercised.
 
 **Top residual risks**
 
@@ -16,8 +16,9 @@ Core backup → incremental → restore → download, auth, contention, schedule
 3. **CLI runs execute inside the CLI process** — fire-and-forget without waiting previously orphaned durable runs (fixed by always waiting). There is still no true detach/daemon mode.
 4. **Folder paths are not validated on create** — a missing path is accepted and only fails at backup time.
 5. **README “Architecture” still describes the old JSON-on-disk store**; durable state is Postgres.
+6. **Bad S3 credentials can be misclassified as “not initialized”** (Access Denied text still triggers auto-init attempt; init then fails). Backup correctly fails, but the error messaging is confusing.
 
-Stack left running: `http://127.0.0.1:8080` (UI login password from this pass: `testpass3`).
+Stack left running: `http://127.0.0.1:8080` (UI login password from this pass: `testpass3`). MinIO (optional, for S3 E2E): container `restic-minio` on the compose network, API `localhost:9000`, console `localhost:9001` (`minioadmin` / `minioadmin`).
 
 ---
 
@@ -66,23 +67,29 @@ _(none remaining after this pass for the single-user Local path)_
    - Documented in code (`SessionManager` is in-memory). Fine for single-user local, surprising if treated like a long-lived “always logged in” appliance.  
    - Product choice: persist sessions in Postgres or accept re-login.
 
+6. **Wrong S3/MinIO secret key reported as “not initialized”**  
+   - **Repro:** create an S3 repo with a bad `--secret-key`, run backup.  
+   - **Expected:** clear “access denied” / bad credentials failure without auto-init.  
+   - **Actual:** stderr `Access Denied` is remapped like a missing repo; auto-init is attempted, then fails with `BucketExists: Access Denied`; run ends as `repository is not initialized`.  
+   - **Suggestion:** treat `access denied` / `InvalidAccessKeyId` / `SignatureDoesNotMatch` as a distinct auth failure before auto-init.
+
 ### Low
 
-6. **Multiple repository entities can share the same Local path with different passwords**  
+7. **Multiple repository entities can share the same Local path with different passwords**  
    - Create `wrongpw` pointing at an existing repo path → allowed; backup fails with “wrong repository password” (correctly classified).  
    - Consider uniqueness warning on `(backend, path)`.
 
-7. **CLI auth password prompts may echo**  
+8. **CLI auth password prompts may echo**  
    - Prompt text already says so; prefer `--password` / env for operators.
 
-8. **`useradd` warning in image build** (`uid 1001 > SYS_UID_MAX 999`)**  
+9. **`useradd` warning in image build** (`uid 1001 > SYS_UID_MAX 999`)**  
    - Cosmetic; use a UID ≤999 or non-system useradd flags.
 
-9. **AuthStore is memory-cached**  
-   - Manually deleting the `auth` row does not reset setup until process restart. Only matters for DB surgery.
+10. **AuthStore is memory-cached**  
+    - Manually deleting the `auth` row does not reset setup until process restart. Only matters for DB surgery.
 
-10. **S3 path not exercised**  
-    - No credentials available; Local only. Env-based credential injection is unit-tested.
+11. **S3 access key appears in API/CLI JSON** (secret key is redacted via `hasSecretKey`)  
+    - Usually acceptable; document if you treat access keys as sensitive.
 
 ---
 
@@ -112,16 +119,17 @@ _(none remaining after this pass for the single-user Local path)_
 | **Mid-run restart (no ghost running)** | Pass | Status `interrupted`; `activeRuns: []` |
 | **Secrets in process args** | Pass | No password/AWS secret in `/proc/*/cmdline`; CLI repo JSON redacts password |
 | **`go test ./...`** | Pass | Against dedicated `restic_test` DB on Compose network |
-| **S3-compatible backend** | Not run | No credentials in environment |
+| **S3-compatible (MinIO Docker)** | Pass | Auto-init, backup, incremental, restore, `repo test`; objects visible in bucket; API start-run OK |
+| **S3 bad credentials** | Partial | Fails safely, but mislabeled as not-initialized (see open issue #6) |
 | **Cloud browser against localhost** | N/A | Used local Playwright + Chrome instead |
 
 ---
 
 ## 5. Residual risk — not fully verified
 
-- **S3 (or other remote) backends** — credential wiring is coded/tested in unit tests; no live S3 E2E.
+- **Real AWS/GCS/R2 endpoints** — MinIO path-style local S3 was verified; vendor-specific auth/IAM quirks were not.
 - **Long-running backups / large repos** — fixtures were small (tens of MB); progress UI and lock behaviour under multi-hour load not soaked.
-- **Scheduler firing on the clock** — schedule was enabled and shown as upcoming; did not wait a full hour for an automatic trigger.
+- **Scheduler firing on the clock** — schedule was enabled and shown as upcoming; did not wait a full hour for an automatic trigger. (Deferred follow-up.)
 - **Retention forget+prune against a rich snapshot history** — retention UI/CLI flags exist; not fully exercised on a multi-snapshot timeline in this pass.
 - **Coolify / Traefik production proxy path** — Compose local only; Coolify FQDN env not tested.
 - **Multi-arch Docker image on amd64** — verified on arm64 Mac.
@@ -151,3 +159,27 @@ docker run --rm --network restic-golang_default -v "$PWD":/src -w /src \
 ```
 
 Disposable E2E data lives under the `appdata` volume (`/app/data/e2e-*`). Do not point cleanup at non-fixture repos.
+
+### MinIO S3 E2E (how this was run)
+
+```sh
+# MinIO on the compose network (left running after this pass)
+docker run -d --name restic-minio --network restic-golang_default \
+  -p 9000:9000 -p 9001:9001 \
+  -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+  minio/minio server /data --console-address ":9001"
+
+docker run --rm --network restic-golang_default --entrypoint /bin/sh minio/mc -c '
+  mc alias set local http://restic-minio:9000 minioadmin minioadmin &&
+  mc mb -p local/restic-web-e2e
+'
+
+docker exec restic-golang-app-1 restic-webctl --json repo create \
+  --name minio-e2e --backend S3 \
+  --endpoint http://restic-minio:9000 --bucket restic-web-e2e --region us-east-1 \
+  --access-key minioadmin --secret-key minioadmin --password 's3-repo-secret'
+
+docker exec restic-golang-app-1 restic-webctl --json job create \
+  --name s3-job --folder e2e-folder --repo minio-e2e
+docker exec restic-golang-app-1 restic-webctl --json job run s3-job --wait
+```
