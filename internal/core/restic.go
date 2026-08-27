@@ -87,6 +87,46 @@ type resticStats struct {
 
 func int64Ptr(v int64) *int64 { return &v }
 
+func snapshotIDsOf(snaps []Snapshot) []string {
+	out := make([]string, 0, len(snaps))
+	for _, s := range snaps {
+		if id := strings.TrimSpace(s.ID); id != "" {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// matchSnapshot finds a snapshot by full id, short id, or unique prefix.
+func matchSnapshot(snaps []Snapshot, id string) (Snapshot, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return Snapshot{}, fmt.Errorf("please choose a snapshot to forget")
+	}
+	var exact, prefix []Snapshot
+	for _, s := range snaps {
+		if s.ID == id || s.ShortID == id {
+			exact = append(exact, s)
+			continue
+		}
+		if strings.HasPrefix(s.ID, id) {
+			prefix = append(prefix, s)
+		}
+	}
+	switch {
+	case len(exact) == 1:
+		return exact[0], nil
+	case len(exact) > 1:
+		return Snapshot{}, fmt.Errorf("snapshot id %q is ambiguous", id)
+	case len(prefix) == 1:
+		return prefix[0], nil
+	case len(prefix) > 1:
+		return Snapshot{}, fmt.Errorf("snapshot id %q is ambiguous", id)
+	default:
+		return Snapshot{}, fmt.Errorf("snapshot %s was not found in this repository", shortID(id))
+	}
+}
+
 // decodeSnapshots parses the JSON output of `restic snapshots --json` into the
 // UI-facing Snapshot shape. Returns the parsed snapshots and the indexes that
 // lacked a stored summary (need a stats backfill for Size/Files).

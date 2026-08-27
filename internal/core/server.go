@@ -48,6 +48,8 @@ func (s *Server) Routes(static http.Handler) http.Handler {
 	mux.HandleFunc("GET /api/repositories/{id}/snapshots", s.handleRepoSnapshots)
 	mux.HandleFunc("POST /api/repositories/{id}/restore", s.handleRepoRestore)
 	mux.HandleFunc("POST /api/repositories/{id}/download", s.handleRepoDownload)
+	mux.HandleFunc("POST /api/repositories/{id}/forget", s.handleRepoForget)
+	mux.HandleFunc("POST /api/repositories/{id}/reset", s.handleRepoReset)
 
 	mux.HandleFunc("GET /api/folders", s.handleFolderList)
 	mux.HandleFunc("POST /api/folders", s.handleFolderCreate)
@@ -65,6 +67,7 @@ func (s *Server) Routes(static http.Handler) http.Handler {
 	// Runs: every long-running operation is a run, watched the same way.
 	mux.HandleFunc("POST /api/jobs/{id}/run", s.handleJobRun)
 	mux.HandleFunc("POST /api/jobs/{id}/retention", s.handleJobRetention)
+	mux.HandleFunc("POST /api/jobs/{id}/forget", s.handleJobForget)
 	mux.HandleFunc("GET /api/jobs/{id}/runs", s.handleJobRuns)
 	mux.HandleFunc("GET /api/runs", s.handleRunList)
 	mux.HandleFunc("GET /api/runs/{id}", s.handleRunGet)

@@ -3,6 +3,7 @@ package core
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -18,6 +19,18 @@ import (
 func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MiB
 	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
+		errorJSON(w, http.StatusBadRequest, "bad_request", "Could not read request: "+err.Error())
+		return false
+	}
+	return true
+}
+
+func decodeJSONAllowEmpty(w http.ResponseWriter, r *http.Request, dst any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
+		if errors.Is(err, io.EOF) {
+			return true
+		}
 		errorJSON(w, http.StatusBadRequest, "bad_request", "Could not read request: "+err.Error())
 		return false
 	}
@@ -343,7 +356,12 @@ func (s *Server) handleJobUpdate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleJobDelete(w http.ResponseWriter, r *http.Request) {
-	if err := s.app.Jobs.Delete(r.PathValue("id")); err != nil {
+	id := r.PathValue("id")
+	if run := s.app.JobActiveRun(id); run != nil {
+		writeStoreError(w, conflictf("This job has a %s still running. Stop it or wait for it to finish.", run.Kind))
+		return
+	}
+	if err := s.app.Jobs.Delete(id); err != nil {
 		writeStoreError(w, err)
 		return
 	}

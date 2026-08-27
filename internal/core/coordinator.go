@@ -387,6 +387,128 @@ func (c *Coordinator) StartRetention(jobID, trigger string) (*Run, error) {
 	})
 }
 
+// StartForgetSnapshot forgets one snapshot in a repository, then prunes.
+func (c *Coordinator) StartForgetSnapshot(repoID, snapshotID string) (*Run, error) {
+	repo, ok := c.app.Repos.Get(repoID)
+	if !ok {
+		return nil, notFoundf("repository not found")
+	}
+	snapshotID = strings.TrimSpace(snapshotID)
+	if snapshotID == "" {
+		return nil, validf("please choose a snapshot to forget")
+	}
+	run := &Run{
+		Kind: KindForget, Status: StatusStarting, RepositoryID: repo.ID, RepoName: repo.Name,
+		Params: map[string]string{"snapshotId": snapshotID, "scope": "snapshot"},
+	}
+	return c.startRun(repo, run, func(ctx context.Context, h *runHandle) (int, error) {
+		h.Log("info", "system", "Forgetting snapshot "+shortID(snapshotID)+" from repository "+repo.Name)
+		snaps, err := c.runner.Snapshots(ctx, &repo, "")
+		if err != nil {
+			return 0, err
+		}
+		snap, err := matchSnapshot(snaps, snapshotID)
+		if err != nil {
+			return 0, err
+		}
+		if snap.ID != snapshotID {
+			h.Log("info", "system", "Matched snapshot "+snap.ID)
+		}
+		return c.runner.ForgetSnapshots(ctx, &repo, []string{snap.ID}, h)
+	})
+}
+
+// StartForgetJob forgets every snapshot tagged for the job, then prunes.
+// When deleteJob is true the catalog row is removed only after restic succeeds.
+func (c *Coordinator) StartForgetJob(jobID string, deleteJob bool) (*Run, error) {
+	job, _, repo, err := c.app.resolveJob(jobID)
+	if err != nil {
+		return nil, err
+	}
+	if deleteJob {
+		if active := c.app.JobActiveRun(job.ID); active != nil {
+			return nil, &BusyError{
+				RepoName: repo.Name,
+				Blocking: blockingRun{
+					RunID:     active.ID,
+					Kind:      active.Kind,
+					JobName:   active.JobName,
+					StartedAt: active.StartedAt,
+				},
+			}
+		}
+	}
+	tag := job.ResticTag()
+	params := map[string]string{"tag": tag, "scope": "job"}
+	if deleteJob {
+		params["deleteJob"] = "true"
+	}
+	run := &Run{
+		Kind:         KindForget,
+		Status:       StatusStarting,
+		JobID:        job.ID,
+		RepositoryID: repo.ID,
+		JobName:      job.Name,
+		RepoName:     repo.Name,
+		Params:       params,
+	}
+	return c.startRun(repo, run, func(ctx context.Context, h *runHandle) (int, error) {
+		if deleteJob {
+			h.Log("info", "system", fmt.Sprintf("Forgetting all snapshots tagged %s, then deleting job %q", tag, job.Name))
+		} else {
+			h.Log("info", "system", fmt.Sprintf("Forgetting all snapshots tagged %s in repository %q", tag, repo.Name))
+		}
+		snaps, err := c.runner.Snapshots(ctx, &repo, tag)
+		if err != nil {
+			return 0, err
+		}
+		ids := snapshotIDsOf(snaps)
+		h.Log("info", "system", fmt.Sprintf("Found %d snapshot(s) for this job.", len(ids)))
+		code, err := c.runner.ForgetSnapshots(ctx, &repo, ids, h)
+		if err != nil {
+			return code, err
+		}
+		if code != 0 && code != resticExitWarnings {
+			return code, nil
+		}
+		if deleteJob {
+			if derr := c.app.Jobs.Delete(job.ID); derr != nil {
+				var nf *NotFoundError
+				if !errors.As(derr, &nf) {
+					h.Log("error", "system", "Snapshots were forgotten, but the job could not be deleted: "+derr.Error())
+					return 0, derr
+				}
+			} else {
+				h.Log("ok", "system", "Deleted job "+job.Name+" from the app.")
+			}
+		}
+		return code, nil
+	})
+}
+
+// StartResetRepo forgets every snapshot in a repository, then prunes.
+// The repository entity and restic keys stay; the next backup recreates snapshots.
+func (c *Coordinator) StartResetRepo(repoID string) (*Run, error) {
+	repo, ok := c.app.Repos.Get(repoID)
+	if !ok {
+		return nil, notFoundf("repository not found")
+	}
+	run := &Run{
+		Kind: KindForget, Status: StatusStarting, RepositoryID: repo.ID, RepoName: repo.Name,
+		Params: map[string]string{"scope": "repo"},
+	}
+	return c.startRun(repo, run, func(ctx context.Context, h *runHandle) (int, error) {
+		h.Log("info", "system", "Forgetting every snapshot in repository "+repo.Name)
+		snaps, err := c.runner.Snapshots(ctx, &repo, "")
+		if err != nil {
+			return 0, err
+		}
+		ids := snapshotIDsOf(snaps)
+		h.Log("info", "system", fmt.Sprintf("Found %d snapshot(s).", len(ids)))
+		return c.runner.ForgetSnapshots(ctx, &repo, ids, h)
+	})
+}
+
 // ErrRunNotActive means a stop was requested for a run that is not currently
 // running (already finished, unknown, or not stoppable from this process).
 var ErrRunNotActive = errors.New("run is not currently running")

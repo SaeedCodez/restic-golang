@@ -53,6 +53,9 @@ type Runner interface {
 	// Forget applies a keep-policy to snapshots with the given tag, then prunes
 	// unreferenced data (`restic forget --prune`). Returns restic's exit code.
 	Forget(ctx context.Context, repo *Repository, tag string, policy JobRetention, sink RunSink) (int, error)
+	// ForgetSnapshots removes the given snapshot IDs, then prunes unreferenced
+	// data. An empty list is a no-op success (nothing to forget).
+	ForgetSnapshots(ctx context.Context, repo *Repository, snapshotIDs []string, sink RunSink) (int, error)
 }
 
 // resticRunner is the real Runner: it shells out to the restic CLI.
@@ -243,6 +246,88 @@ func (*resticRunner) Forget(ctx context.Context, repo *Repository, tag string, p
 		return -1, err
 	}
 	return streamRestic(ctx, repo, KindRetention, sink, args...)
+}
+
+// forgetSnapshotBatchSize caps how many snapshot ids are passed to one
+// `restic forget` so we stay under ARG_MAX on large repositories.
+const forgetSnapshotBatchSize = 100
+
+type forgetBatch struct {
+	IDs   []string
+	Prune bool
+}
+
+func uniqueNonEmpty(ids []string) []string {
+	out := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
+func planForgetBatches(ids []string, batchSize int) []forgetBatch {
+	cleaned := uniqueNonEmpty(ids)
+	if len(cleaned) == 0 {
+		return nil
+	}
+	if batchSize <= 0 {
+		batchSize = forgetSnapshotBatchSize
+	}
+	out := make([]forgetBatch, 0, (len(cleaned)+batchSize-1)/batchSize)
+	for i := 0; i < len(cleaned); i += batchSize {
+		end := i + batchSize
+		if end > len(cleaned) {
+			end = len(cleaned)
+		}
+		chunk := append([]string(nil), cleaned[i:end]...)
+		out = append(out, forgetBatch{IDs: chunk, Prune: end == len(cleaned)})
+	}
+	return out
+}
+
+func forgetSnapshotArgs(ids []string, prune bool) []string {
+	args := []string{"forget", "--json"}
+	if prune {
+		args = append(args, "--prune")
+	}
+	return append(args, ids...)
+}
+
+func (*resticRunner) ForgetSnapshots(ctx context.Context, repo *Repository, snapshotIDs []string, sink RunSink) (int, error) {
+	batches := planForgetBatches(snapshotIDs, forgetSnapshotBatchSize)
+	if len(batches) == 0 {
+		sink.Log("info", "system", "No snapshots to forget.")
+		return 0, nil
+	}
+	var last int
+	for _, b := range batches {
+		if err := ctx.Err(); err != nil {
+			return resticExitInterrupted, nil
+		}
+		msg := fmt.Sprintf("Forgetting %d snapshot(s)", len(b.IDs))
+		if b.Prune {
+			msg += " and pruning unused data"
+		}
+		sink.Log("info", "system", msg+"…")
+		code, err := streamRestic(ctx, repo, KindForget, sink, forgetSnapshotArgs(b.IDs, b.Prune)...)
+		last = code
+		if err != nil {
+			return code, err
+		}
+		if code != 0 && code != resticExitWarnings {
+			return code, nil
+		}
+	}
+	return last, nil
 }
 
 // forgetArgs builds `restic forget --prune` arguments for a job-scoped policy.

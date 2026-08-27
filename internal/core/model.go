@@ -488,6 +488,7 @@ const (
 	KindDownload  RunKind = "download"
 	KindUnlock    RunKind = "unlock"
 	KindRetention RunKind = "retention"
+	KindForget    RunKind = "forget"
 )
 
 // TriggerAfterBackup marks a retention run started after a successful backup.

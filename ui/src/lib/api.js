@@ -70,6 +70,8 @@ export const Repositories = {
   restore: (id, snapshotId, target) =>
     api.post(`/api/repositories/${id}/restore`, { snapshotId, target }),
   download: (id, snapshotId) => api.post(`/api/repositories/${id}/download`, { snapshotId }),
+  forget: (id, snapshotId) => api.post(`/api/repositories/${id}/forget`, { snapshotId }),
+  reset: (id) => api.post(`/api/repositories/${id}/reset`),
 };
 
 export const Folders = {
@@ -87,6 +89,7 @@ export const Jobs = {
   remove: (id) => api.del(`/api/jobs/${id}`),
   run: (id) => api.post(`/api/jobs/${id}/run`),
   retention: (id) => api.post(`/api/jobs/${id}/retention`),
+  forget: (id, { deleteJob } = {}) => api.post(`/api/jobs/${id}/forget`, { deleteJob: !!deleteJob }),
   runs: (id) => api.get(`/api/jobs/${id}/runs`),
   snapshots: (id) => api.get(`/api/jobs/${id}/snapshots`),
 };

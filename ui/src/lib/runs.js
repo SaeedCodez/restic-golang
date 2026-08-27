@@ -46,6 +46,7 @@ export const KIND_LABEL = {
   download: "Download",
   unlock: "Unlock",
   retention: "Retention",
+  forget: "Forget",
 };
 
 export function statusLabel(status) {

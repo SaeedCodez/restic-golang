@@ -72,15 +72,20 @@ type fakeRunner struct {
 	// streamFn drives Backup/Restore/Forget. If nil, the op succeeds immediately.
 	streamFn func(ctx context.Context, kind RunKind, sink RunSink) (int, error)
 
-	mu          sync.Mutex
-	snapTags    []string // tags passed to Snapshots, for assertions
-	initCount   int      // number of Init calls, for assertions
-	forgetCalls []forgetCall
+	mu              sync.Mutex
+	snapTags        []string // tags passed to Snapshots, for assertions
+	initCount       int      // number of Init calls, for assertions
+	forgetCalls     []forgetCall
+	forgetSnapCalls []forgetSnapshotsCall
 }
 
 type forgetCall struct {
 	Tag    string
 	Policy JobRetention
+}
+
+type forgetSnapshotsCall struct {
+	IDs []string
 }
 
 func (f *fakeRunner) recordedTags() []string {
@@ -152,6 +157,29 @@ func (f *fakeRunner) recordedForgets() []forgetCall {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]forgetCall(nil), f.forgetCalls...)
+}
+
+func (f *fakeRunner) ForgetSnapshots(ctx context.Context, repo *Repository, snapshotIDs []string, sink RunSink) (int, error) {
+	ids := uniqueNonEmpty(snapshotIDs)
+	f.mu.Lock()
+	f.forgetSnapCalls = append(f.forgetSnapCalls, forgetSnapshotsCall{IDs: append([]string(nil), ids...)})
+	f.mu.Unlock()
+	if len(ids) == 0 {
+		sink.Log("info", "system", "No snapshots to forget.")
+		return 0, nil
+	}
+	sink.PID(4242, "faketoken")
+	if f.streamFn != nil {
+		return f.streamFn(ctx, KindForget, sink)
+	}
+	sink.Log("info", "stdout", "fake forget snapshots applied")
+	return 0, nil
+}
+
+func (f *fakeRunner) recordedForgetSnapshots() []forgetSnapshotsCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]forgetSnapshotsCall(nil), f.forgetSnapCalls...)
 }
 
 // gatedStream is a streamFn that emits an initial log + progress line, signals

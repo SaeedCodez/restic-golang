@@ -24,6 +24,7 @@ const KIND_FILTERS = [
   { value: "all", label: "All operations" },
   { value: "backup", label: "Backups" },
   { value: "retention", label: "Retention" },
+  { value: "forget", label: "Forget" },
   { value: "restore", label: "Restores" },
   { value: "download", label: "Downloads" },
   { value: "init", label: "Initializations" },

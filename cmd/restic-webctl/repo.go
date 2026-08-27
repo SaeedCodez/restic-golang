@@ -69,6 +69,17 @@ func (c *CLI) cmdRepo(args []string) int {
 			return c.fail(err)
 		}
 		return c.repoDownload(args[1], args[2:])
+	case "forget":
+		if err := requireArgs(args[1:], 1, helpRepo()); err != nil {
+			return c.fail(err)
+		}
+		return c.repoForget(args[1], args[2:])
+	case "reset":
+		if err := requireArgs(args[1:], 1, helpRepo()); err != nil {
+			return c.fail(err)
+		}
+		_, wait, follow := parseWaitFollow(args[2:])
+		return c.repoReset(args[1], wait, follow)
 	default:
 		return c.fail(usagef("unknown repo command %q\n\n%s", args[0], helpRepo()))
 	}
@@ -399,5 +410,32 @@ func (c *CLI) repoDownload(query string, args []string) int {
 		return c.fail(usagef("--snapshot is required"))
 	}
 	run, err := c.app.Coord.StartDownload(repo.ID, *snap)
+	return c.startAndMaybeWait(run, err, wait, follow)
+}
+
+func (c *CLI) repoForget(query string, args []string) int {
+	repo, err := c.resolveRepo(query)
+	if err != nil {
+		return c.fail(err)
+	}
+	args, wait, follow := parseWaitFollow(args)
+	fs := newFlagSet("repo forget")
+	snap := fs.String("snapshot", "", "snapshot id")
+	if err := parseFlagSet(fs, args, helpRepo()); err != nil {
+		return c.fail(err)
+	}
+	if *snap == "" {
+		return c.fail(usagef("--snapshot is required"))
+	}
+	run, err := c.app.Coord.StartForgetSnapshot(repo.ID, *snap)
+	return c.startAndMaybeWait(run, err, wait, follow)
+}
+
+func (c *CLI) repoReset(query string, wait, follow bool) int {
+	repo, err := c.resolveRepo(query)
+	if err != nil {
+		return c.fail(err)
+	}
+	run, err := c.app.Coord.StartResetRepo(repo.ID)
 	return c.startAndMaybeWait(run, err, wait, follow)
 }

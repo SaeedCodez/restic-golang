@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowDownToLine, Camera, FolderInput, RefreshCw } from "lucide-react";
+import { ArrowDownToLine, Camera, FolderInput, RefreshCw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import {
@@ -18,7 +18,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { EmptyState } from "@/components/empty";
 import { Mono } from "@/components/page";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Repositories } from "@/lib/api";
+import { useConfirm } from "@/components/confirm";
+import { Jobs, Repositories } from "@/lib/api";
 import { fmtBytes, fmtCount, fmtRelative, fmtTime, shortId } from "@/lib/format";
 import { handleStartResponse } from "@/lib/start-run";
 
@@ -147,11 +148,16 @@ export function SnapshotsPanel({
   reloadKey,
   /** When set (job page), restore defaults to this absolute folder path. */
   defaultRestoreTarget,
+  /** When set, allow forgetting every snapshot for this job. */
+  jobId,
 }) {
   const navigate = useNavigate();
+  const confirm = useConfirm();
   const [state, setState] = React.useState({ loading: true, payload: null });
   const [restoring, setRestoring] = React.useState(null);
   const [downloadingId, setDownloadingId] = React.useState(null);
+  const [forgettingId, setForgettingId] = React.useState(null);
+  const [forgettingAll, setForgettingAll] = React.useState(false);
 
   const refresh = React.useCallback(async () => {
     setState((s) => ({ ...s, loading: true }));
@@ -170,6 +176,37 @@ export function SnapshotsPanel({
     handleStartResponse(res, navigate, "Could not start the download.");
   };
 
+  const startForget = async (snapshot) => {
+    const id = shortId(snapshot.id);
+    const ok = await confirm({
+      title: `Delete snapshot ${id}?`,
+      description:
+        "This forgets the snapshot and prunes unused data from the repository. Other jobs sharing the repository keep their snapshots. This cannot be undone.",
+      confirmLabel: "Delete snapshot",
+      destructive: true,
+    });
+    if (!ok) return;
+    setForgettingId(snapshot.id);
+    const res = await Repositories.forget(repositoryId, snapshot.id);
+    setForgettingId(null);
+    handleStartResponse(res, navigate, "Could not delete the snapshot.");
+  };
+
+  const startForgetAll = async () => {
+    const ok = await confirm({
+      title: "Delete all snapshots from this job?",
+      description:
+        "This forgets every snapshot tagged for this job and prunes unused data. The job itself is kept. This cannot be undone.",
+      confirmLabel: "Delete snapshots",
+      destructive: true,
+    });
+    if (!ok) return;
+    setForgettingAll(true);
+    const res = await Jobs.forget(jobId);
+    setForgettingAll(false);
+    handleStartResponse(res, navigate, "Could not delete this job's snapshots.");
+  };
+
   const payload = state.payload;
   const snapshots = React.useMemo(() => {
     const list = (payload && payload.ok && payload.snapshots) || [];
@@ -183,10 +220,24 @@ export function SnapshotsPanel({
           <CardTitle>{title}</CardTitle>
           {description ? <CardDescription className="mt-1">{description}</CardDescription> : null}
         </div>
-        <Button variant="outline" size="sm" onClick={refresh} disabled={state.loading}>
-          <RefreshCw className={state.loading ? "animate-spin" : undefined} />
-          Refresh
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          {jobId && snapshots.length > 0 ? (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={startForgetAll}
+              disabled={state.loading || forgettingAll}
+              className="text-destructive hover:text-destructive"
+            >
+              <Trash2 />
+              {forgettingAll ? "Starting…" : "Delete all"}
+            </Button>
+          ) : null}
+          <Button variant="outline" size="sm" onClick={refresh} disabled={state.loading}>
+            <RefreshCw className={state.loading ? "animate-spin" : undefined} />
+            Refresh
+          </Button>
+        </div>
       </CardHeader>
 
       {state.loading && !payload ? (
@@ -264,6 +315,16 @@ export function SnapshotsPanel({
                       >
                         <ArrowDownToLine />
                         {downloadingId === s.id ? "Starting…" : "Download"}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => startForget(s)}
+                        disabled={forgettingId === s.id}
+                        className="text-muted-foreground hover:text-destructive"
+                      >
+                        <Trash2 />
+                        {forgettingId === s.id ? "Starting…" : "Delete"}
                       </Button>
                     </div>
                   </TableCell>

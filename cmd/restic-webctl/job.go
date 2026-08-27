@@ -35,19 +35,24 @@ func (c *CLI) cmdJob(args []string) int {
 		if err := requireArgs(args[1:], 1, helpJob()); err != nil {
 			return c.fail(err)
 		}
-		return c.jobDelete(args[1])
+		return c.jobDelete(args[1], args[2:])
 	case "run", "backup":
 		if err := requireArgs(args[1:], 1, helpJob()); err != nil {
 			return c.fail(err)
 		}
 		_, wait, follow := parseWaitFollow(args[2:])
 		return c.jobRun(args[1], wait, follow)
-	case "retention", "forget":
+	case "retention":
 		if err := requireArgs(args[1:], 1, helpJob()); err != nil {
 			return c.fail(err)
 		}
 		_, wait, follow := parseWaitFollow(args[2:])
 		return c.jobRetention(args[1], wait, follow)
+	case "forget":
+		if err := requireArgs(args[1:], 1, helpJob()); err != nil {
+			return c.fail(err)
+		}
+		return c.jobForget(args[1], args[2:])
 	case "runs", "history":
 		if err := requireArgs(args[1:], 1, helpJob()); err != nil {
 			return c.fail(err)
@@ -348,15 +353,45 @@ func (c *CLI) jobUpdate(query string, args []string) int {
 	return c.okMessage("Job updated.", map[string]any{"id": existing.ID})
 }
 
-func (c *CLI) jobDelete(query string) int {
+func (c *CLI) jobDelete(query string, args []string) int {
+	args, wait, follow := parseWaitFollow(args)
+	fs := newFlagSet("job delete")
+	forget := fs.Bool("forget", false, "also forget this job's snapshots and prune unused data")
+	if err := parseFlagSet(fs, args, helpJob()); err != nil {
+		return c.fail(err)
+	}
 	job, err := c.resolveJob(query)
 	if err != nil {
 		return c.fail(err)
+	}
+	if *forget {
+		run, err := c.app.Coord.StartForgetJob(job.ID, true)
+		return c.startAndMaybeWait(run, err, wait, follow)
+	}
+	if run := c.app.JobActiveRun(job.ID); run != nil {
+		return c.fail(&core.ConflictError{
+			Msg: fmt.Sprintf("This job has a %s still running. Stop it or wait for it to finish.", run.Kind),
+		})
 	}
 	if err := c.app.Jobs.Delete(job.ID); err != nil {
 		return c.fail(err)
 	}
 	return c.okMessage(fmt.Sprintf("Deleted job %s.", job.Name), map[string]any{"id": job.ID})
+}
+
+func (c *CLI) jobForget(query string, args []string) int {
+	args, wait, follow := parseWaitFollow(args)
+	fs := newFlagSet("job forget")
+	deleteJob := fs.Bool("delete-job", false, "delete the job after its snapshots are forgotten")
+	if err := parseFlagSet(fs, args, helpJob()); err != nil {
+		return c.fail(err)
+	}
+	job, err := c.resolveJob(query)
+	if err != nil {
+		return c.fail(err)
+	}
+	run, err := c.app.Coord.StartForgetJob(job.ID, *deleteJob)
+	return c.startAndMaybeWait(run, err, wait, follow)
 }
 
 func (c *CLI) jobRun(query string, wait, follow bool) int {

@@ -92,6 +92,19 @@ func (a *App) JobsUsingFolder(folderID string) []Job {
 	return out
 }
 
+// JobActiveRun returns a starting/running run for this job, if any.
+func (a *App) JobActiveRun(jobID string) *Run {
+	if a == nil || a.Runs == nil || jobID == "" {
+		return nil
+	}
+	for _, run := range a.Runs.ActiveRuns() {
+		if run.JobID == jobID {
+			return run
+		}
+	}
+	return nil
+}
+
 // resolveJob returns a job together with its folder and repository, or an error
 // if any of them is missing (e.g. the folder or repository was deleted).
 func (a *App) resolveJob(jobID string) (Job, Folder, Repository, error) {

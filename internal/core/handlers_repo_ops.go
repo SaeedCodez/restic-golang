@@ -127,6 +127,36 @@ func (s *Server) handleRepoRestore(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "runId": run.ID, "run": run})
 }
 
+func (s *Server) handleRepoForget(w http.ResponseWriter, r *http.Request) {
+	if !s.requireRestic(w) {
+		return
+	}
+	var body struct {
+		SnapshotID string `json:"snapshotId"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	run, err := s.app.Coord.StartForgetSnapshot(r.PathValue("id"), body.SnapshotID)
+	if err != nil {
+		writeStartError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "runId": run.ID, "run": run})
+}
+
+func (s *Server) handleRepoReset(w http.ResponseWriter, r *http.Request) {
+	if !s.requireRestic(w) {
+		return
+	}
+	run, err := s.app.Coord.StartResetRepo(r.PathValue("id"))
+	if err != nil {
+		writeStartError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "runId": run.ID, "run": run})
+}
+
 func (s *Server) handleRepoDownload(w http.ResponseWriter, r *http.Request) {
 	if !s.requireRestic(w) {
 		return

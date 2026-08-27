@@ -9,7 +9,7 @@ Commands:
   activity   live runs + recent history
   folder     manage backup folders
   repo       manage storage repositories
-  job        manage jobs (run backups, schedules, retention)
+  job        manage jobs (run backups, schedules, retention, forget)
   run        inspect, follow, stop, and download runs
 
 Global flags:
@@ -71,6 +71,8 @@ func helpRepo() string {
   restic-webctl repo snapshots <id|name>
   restic-webctl repo restore <id|name> --snapshot ID --target PATH [--wait]
   restic-webctl repo download <id|name> --snapshot ID [--wait]
+  restic-webctl repo forget <id|name> --snapshot ID [--wait]
+  restic-webctl repo reset <id|name> [--wait]
 
 Local create options:  --path DIR
 S3 create options:     --endpoint URL --bucket NAME [--region R] --access-key K --secret-key S
@@ -83,9 +85,10 @@ func helpJob() string {
   restic-webctl job get <id|name>
   restic-webctl job create --name NAME --folder ID|NAME --repo ID|NAME [schedule] [retention]
   restic-webctl job update <id|name> [fields…]
-  restic-webctl job delete <id|name>
+  restic-webctl job delete <id|name> [--forget]
   restic-webctl job run <id|name> [--wait] [--follow]
   restic-webctl job retention <id|name> [--wait] [--follow]
+  restic-webctl job forget <id|name> [--delete-job] [--wait] [--follow]
   restic-webctl job runs <id|name> [--limit N]
   restic-webctl job snapshots <id|name>
 

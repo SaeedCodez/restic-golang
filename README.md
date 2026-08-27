@@ -13,8 +13,8 @@ built around three things you create and manage:
 
 ![Dashboard, the home screen: inventory counts, live runs, and upcoming schedules](docs/screenshots/dashboard.png)
 
-Everything long-running — backups, restores, repository setup, and old-snapshot
-restores/downloads — is a **run**: a durable record with its own live progress
+Everything long-running — backups, restores, repository setup, snapshot
+forget/reset, and old-snapshot restores/downloads — is a **run**: a durable record with its own live progress
 and a permanent log. History survives restarts; a job in progress still shows as
 running (with live progress and log) after a refresh, a second tab, or an hour
 away; and if the app is killed mid-backup it never comes back claiming something
@@ -42,7 +42,8 @@ something is not fought by the next incoming line.
 **A job owns its history.** Every run it has ever done, plus the snapshots it
 created — matched by a permanent per-job restic tag, so they stay findable in the
 repository even if this app's state is lost. Any snapshot can be restored to a
-folder or downloaded as a zip.
+folder, downloaded as a zip, or forgotten (with prune) from the job or
+repository page.
 
 ![A job page: its complete run history and the snapshots it created](docs/screenshots/job-detail.png)
 
@@ -265,6 +266,9 @@ that API (see [docs/cli.md](docs/cli.md)); you can also call it directly:
 | `GET /api/jobs` | each job carries its `lastRun`, `runCount`, and schedule health (`nextDueAt`, `scheduleState`) |
 | `POST /api/jobs/{id}/run` | `202` with the new run id, or `409` `busy` naming the blocking run |
 | `POST /api/jobs/{id}/retention` | `202` with a forget+prune run; requires retention enabled on the job |
+| `POST /api/jobs/{id}/forget` | `202` forget+prune of this job's tagged snapshots; `{ deleteJob: true }` removes the job after success |
+| `POST /api/repositories/{id}/forget` | `202` forget+prune of one snapshot (`{ snapshotId }`) |
+| `POST /api/repositories/{id}/reset` | `202` forget+prune of every snapshot; the repository entity stays |
 | `GET /api/runs` | filter with `status` (`active`/`finished`/an exact status), `kind`, `jobId`, `limit`; `total` reports the match count before the limit |
 | `GET /api/runs/{id}/log` | the durable log, `?after=<seq>` for incremental reads |
 | `GET /api/runs/{id}/events` | SSE: run state, progress and log, resumable via `Last-Event-ID` |
@@ -322,6 +326,9 @@ stored choice is applied before first paint, so the page never flashes.
 | Download (zip)  | restore into a temp workspace, then stream a zip        |
 | Unlock          | `restic -r <repo> unlock` (removes only stale locks)    |
 | Retention       | `restic -r <repo> forget --tag … --keep-* --prune --json` |
+| Forget snapshot | `restic -r <repo> forget <id> --prune --json`           |
+| Forget job data | list by tag, then `forget <ids…> --prune --json`        |
+| Empty repository| list all snapshots, then `forget <ids…> --prune --json` |
 
 ## Notes & limitations
 
@@ -338,6 +345,9 @@ stored choice is applied before first paint, so the page never flashes.
   weekly / monthly / within-days rules. After each successful backup (or via
   **Apply now** on the job page), the app runs `forget --prune` scoped to that
   job's tag so other jobs sharing the repository are unaffected.
+- Deleting a job, folder, or repository from the app removes the catalog
+  entry only. To delete restic data, forget a snapshot, forget a job's
+  snapshots (optionally while deleting the job), or empty a repository.
 - A browser cannot hand the server a real local path, so source and target
   folders are entered as absolute-path text fields. A mistyped path surfaces as a
   failed run rather than as validation.

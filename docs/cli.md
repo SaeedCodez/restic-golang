@@ -173,6 +173,8 @@ restic-webctl repo restore <id|name> --snapshot ID --target PATH [--wait]
 # When PATH equals a path stored in the snapshot (usual job-folder restore),
 # the app uses restic --target / so files land in place, not nested under PATH.
 restic-webctl repo download <id|name> --snapshot ID [--wait]
+restic-webctl repo forget <id|name> --snapshot ID [--wait]
+restic-webctl repo reset <id|name> [--wait]
 ```
 
 Local create: `--path DIR`  
@@ -185,12 +187,19 @@ restic-webctl job list
 restic-webctl job get <id|name>
 restic-webctl job create --name NAME --folder ID|NAME --repo ID|NAME […]
 restic-webctl job update <id|name> […]
-restic-webctl job delete <id|name>
+restic-webctl job delete <id|name> [--forget]
 restic-webctl job run <id|name> [--wait] [--follow]
 restic-webctl job retention <id|name> [--wait] [--follow]
+restic-webctl job forget <id|name> [--delete-job] [--wait] [--follow]
 restic-webctl job runs <id|name> [--limit N]
 restic-webctl job snapshots <id|name>
 ```
+
+`job delete` removes the job from the app and leaves restic snapshots in place.
+`job delete --forget` (or `job forget --delete-job`) forgets that job's tagged
+snapshots, prunes unused data, then deletes the job. `job forget` without
+`--delete-job` only removes the snapshots. `repo forget --snapshot` deletes one
+snapshot; `repo reset` forgets every snapshot in the repository.
 
 ### `run`
 

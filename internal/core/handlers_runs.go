@@ -51,6 +51,24 @@ func (s *Server) handleJobRetention(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "runId": run.ID, "run": run})
 }
 
+func (s *Server) handleJobForget(w http.ResponseWriter, r *http.Request) {
+	if !s.requireRestic(w) {
+		return
+	}
+	var body struct {
+		DeleteJob bool `json:"deleteJob"`
+	}
+	if !decodeJSONAllowEmpty(w, r, &body) {
+		return
+	}
+	run, err := s.app.Coord.StartForgetJob(r.PathValue("id"), body.DeleteJob)
+	if err != nil {
+		writeStartError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "runId": run.ID, "run": run})
+}
+
 func (s *Server) handleJobRuns(w http.ResponseWriter, r *http.Request) {
 	if !s.app.Jobs.Exists(r.PathValue("id")) {
 		errorJSON(w, http.StatusNotFound, "not_found", "job not found")

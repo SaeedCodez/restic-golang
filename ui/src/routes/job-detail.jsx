@@ -4,6 +4,14 @@ import { toast } from "sonner";
 import { ArrowRight, Play, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Breadcrumb, Mono, Page, PageHeader } from "@/components/page";
 import { RunHistory } from "@/components/run-history";
@@ -11,7 +19,6 @@ import { ScheduleEditor } from "@/components/schedule-editor";
 import { RetentionEditor } from "@/components/retention-editor";
 import { SnapshotsPanel } from "@/components/snapshots-panel";
 import { StatusBadge } from "@/components/status-badge";
-import { useConfirm } from "@/components/confirm";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import NotFound from "@/routes/not-found";
 import { Jobs, errorOf } from "@/lib/api";
@@ -22,9 +29,9 @@ import { handleStartResponse } from "@/lib/start-run";
 export default function JobDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const confirm = useConfirm();
   const { runsVersion } = useLive();
   const [starting, setStarting] = React.useState(false);
+  const [deleting, setDeleting] = React.useState(false);
 
   const loader = React.useCallback(async () => {
     const [jobR, runsR] = await Promise.all([Jobs.get(id), Jobs.runs(id)]);
@@ -66,22 +73,19 @@ export default function JobDetail() {
     reload();
   };
 
-  const remove = async () => {
-    const ok = await confirm({
-      title: `Delete “${job.name}”?`,
-      description:
-        "The job stops existing, but its run history and the snapshots already in the repository are kept.",
-      confirmLabel: "Delete job",
-      destructive: true,
-    });
-    if (!ok) return;
+  const remove = async (forgetSnapshots) => {
+    if (forgetSnapshots) {
+      const res = await Jobs.forget(id, { deleteJob: true });
+      return handleStartResponse(res, navigate, "Could not delete the job and its snapshots.");
+    }
     const res = await Jobs.remove(id);
     if (res.ok) {
       toast.success(`Job “${job.name}” deleted.`);
       navigate("/jobs");
-    } else {
-      toast.error(errorOf(res, "Could not delete the job."));
+      return true;
     }
+    toast.error(errorOf(res, "Could not delete the job."));
+    return false;
   };
 
   return (
@@ -118,7 +122,7 @@ export default function JobDetail() {
                 <Button
                   size="icon-sm"
                   variant="ghost"
-                  onClick={remove}
+                  onClick={() => setDeleting(true)}
                   className="text-muted-foreground hover:text-destructive"
                   aria-label="Delete job"
                 >
@@ -164,8 +168,75 @@ export default function JobDetail() {
           repositoryId={job.repositoryId}
           reloadKey={runsVersion}
           defaultRestoreTarget={job.folderPath}
+          jobId={id}
         />
       </div>
+
+      <JobDeleteDialog
+        open={deleting}
+        onOpenChange={setDeleting}
+        jobName={job.name}
+        onConfirm={remove}
+      />
     </Page>
+  );
+}
+
+function JobDeleteDialog({ open, onOpenChange, jobName, onConfirm }) {
+  const [forgetSnapshots, setForgetSnapshots] = React.useState(false);
+  const [busy, setBusy] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!open) return;
+    setForgetSnapshots(false);
+    setBusy(false);
+  }, [open]);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    const ok = await onConfirm(forgetSnapshots);
+    setBusy(false);
+    if (ok) onOpenChange(false);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <form onSubmit={submit} className="contents">
+          <DialogHeader>
+            <DialogTitle>Delete “{jobName}”?</DialogTitle>
+            <DialogDescription>
+              The job is removed from the app. Run history is kept. Snapshots stay in the
+              repository unless you choose otherwise below.
+            </DialogDescription>
+          </DialogHeader>
+          <label className="flex cursor-pointer items-start justify-between gap-3 rounded-md border border-border px-3 py-2.5">
+            <div>
+              <p className="text-sm font-medium">Also delete this job's snapshots</p>
+              <p className="text-[13px] text-muted-foreground">
+                Forget every snapshot tagged for this job and prune unused data. This cannot
+                be undone.
+              </p>
+            </div>
+            <input
+              type="checkbox"
+              className="mt-0.5 size-4 accent-foreground"
+              checked={forgetSnapshots}
+              onChange={(e) => setForgetSnapshots(e.target.checked)}
+              disabled={busy}
+            />
+          </label>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="destructive" disabled={busy}>
+              {busy ? "Working…" : forgetSnapshots ? "Delete job and snapshots" : "Delete job"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }

@@ -1,13 +1,14 @@
 import * as React from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
-import { CircleAlert, CircleCheck, Database, Info, Pencil, PlugZap, Unlock } from "lucide-react";
+import { CircleAlert, CircleCheck, Database, Info, Pencil, PlugZap, Trash2, Unlock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Breadcrumb, Mono, Page, PageHeader } from "@/components/page";
 import { RepositoryDialog } from "@/routes/repositories";
 import { SnapshotsPanel } from "@/components/snapshots-panel";
+import { useConfirm } from "@/components/confirm";
 import NotFound from "@/routes/not-found";
 import { Repositories, errorOf } from "@/lib/api";
 import { useFetch } from "@/lib/use-fetch";
@@ -44,6 +45,7 @@ export default function RepositoryDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { runsVersion } = useLive();
+  const confirm = useConfirm();
   const [result, setResult] = React.useState(null);
   const [busy, setBusy] = React.useState("");
   const [editing, setEditing] = React.useState(false);
@@ -106,6 +108,23 @@ export default function RepositoryDetail() {
     if (b.ok) toast.success("Stale locks removed.");
   };
 
+  const resetRepo = async () => {
+    const ok = await confirm({
+      title: `Empty “${repo.name}”?`,
+      description:
+        "Forget every snapshot in this repository and prune unused data. Jobs are not deleted. The repository stays initialized. This cannot be undone.",
+      confirmLabel: "Empty repository",
+      destructive: true,
+    });
+    if (!ok) return;
+    setBusy("reset");
+    const res = await Repositories.reset(id);
+    setBusy("");
+    if (!handleStartResponse(res, navigate, "Could not empty the repository.")) {
+      setResult({ kind: "bad", message: errorOf(res, "Could not empty the repository.") });
+    }
+  };
+
   return (
     <Page>
       <PageHeader
@@ -148,6 +167,16 @@ export default function RepositoryDetail() {
             <Button variant="outline" size="sm" onClick={unlock} disabled={busy === "unlock"}>
               <Unlock />
               {busy === "unlock" ? "Unlocking…" : "Remove stale locks"}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={resetRepo}
+              disabled={busy === "reset"}
+              className="text-destructive hover:text-destructive"
+            >
+              <Trash2 />
+              {busy === "reset" ? "Starting…" : "Empty repository"}
             </Button>
           </div>
           <OpResult result={result} />
