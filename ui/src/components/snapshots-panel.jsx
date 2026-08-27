@@ -245,10 +245,10 @@ export function SnapshotsPanel({
                     </Tooltip>
                   </TableCell>
                   <TableCell className="tabular text-muted-foreground">
-                    {s.sizeBytes ? fmtBytes(s.sizeBytes) : "—"}
+                    {s.sizeBytes != null ? fmtBytes(s.sizeBytes) : "—"}
                   </TableCell>
                   <TableCell className="tabular text-muted-foreground">
-                    {s.fileCount ? fmtCount(s.fileCount) : "—"}
+                    {s.fileCount != null ? fmtCount(s.fileCount) : "—"}
                   </TableCell>
                   <TableCell>
                     <div className="flex justify-end gap-1.5">

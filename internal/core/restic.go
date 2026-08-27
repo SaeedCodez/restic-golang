@@ -51,6 +51,8 @@ type TestResult struct {
 }
 
 // Snapshot is the simplified, UI-facing shape of a restic snapshot.
+// SizeBytes/FileCount are nil when restic did not store a summary (pre-0.17
+// backups) and stats backfill was not available.
 type Snapshot struct {
 	ID        string   `json:"id"`
 	ShortID   string   `json:"shortId"`
@@ -58,8 +60,8 @@ type Snapshot struct {
 	Paths     []string `json:"paths"`
 	Hostname  string   `json:"hostname"`
 	Tags      []string `json:"tags"`
-	SizeBytes int64    `json:"sizeBytes"`
-	FileCount int64    `json:"fileCount"`
+	SizeBytes *int64   `json:"sizeBytes,omitempty"`
+	FileCount *int64   `json:"fileCount,omitempty"`
 }
 
 // resticSnapshot mirrors the JSON restic emits for `snapshots --json`.
@@ -77,15 +79,25 @@ type resticSnapshot struct {
 	} `json:"summary,omitempty"`
 }
 
+// resticStats mirrors `restic stats --json` for one snapshot.
+type resticStats struct {
+	TotalSize      int64 `json:"total_size"`
+	TotalFileCount int64 `json:"total_file_count"`
+}
+
+func int64Ptr(v int64) *int64 { return &v }
+
 // decodeSnapshots parses the JSON output of `restic snapshots --json` into the
-// UI-facing Snapshot shape.
-func decodeSnapshots(out []byte) ([]Snapshot, error) {
+// UI-facing Snapshot shape. Returns the parsed snapshots and the indexes that
+// lacked a stored summary (need a stats backfill for Size/Files).
+func decodeSnapshots(out []byte) ([]Snapshot, []int, error) {
 	var raw []resticSnapshot
 	if err := json.Unmarshal(out, &raw); err != nil {
-		return nil, fmt.Errorf("could not parse snapshot list: %w", err)
+		return nil, nil, fmt.Errorf("could not parse snapshot list: %w", err)
 	}
 
 	snaps := make([]Snapshot, 0, len(raw))
+	var missing []int
 	for _, r := range raw {
 		s := Snapshot{
 			ID:       r.ID,
@@ -96,12 +108,14 @@ func decodeSnapshots(out []byte) ([]Snapshot, error) {
 			Tags:     r.Tags,
 		}
 		if r.Summary != nil {
-			s.SizeBytes = r.Summary.TotalBytesProcessed
-			s.FileCount = r.Summary.TotalFilesProcessed
+			s.SizeBytes = int64Ptr(r.Summary.TotalBytesProcessed)
+			s.FileCount = int64Ptr(r.Summary.TotalFilesProcessed)
+		} else {
+			missing = append(missing, len(snaps))
 		}
 		snaps = append(snaps, s)
 	}
-	return snaps, nil
+	return snaps, missing, nil
 }
 
 // classifyRepoError turns restic's stderr into a friendly error for repo reads.

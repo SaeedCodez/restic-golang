@@ -125,7 +125,7 @@ func (*resticRunner) Init(ctx context.Context, repo *Repository) (string, error)
 	return text, nil
 }
 
-func (*resticRunner) Snapshots(ctx context.Context, repo *Repository, tag string) ([]Snapshot, error) {
+func (r *resticRunner) Snapshots(ctx context.Context, repo *Repository, tag string) ([]Snapshot, error) {
 	args := []string{"snapshots", "--json"}
 	if strings.TrimSpace(tag) != "" {
 		args = append(args, "--tag", tag)
@@ -138,7 +138,74 @@ func (*resticRunner) Snapshots(ctx context.Context, repo *Repository, tag string
 	if err != nil {
 		return nil, classifyRepoError(string(out))
 	}
-	return decodeSnapshots(out)
+	snaps, missing, err := decodeSnapshots(out)
+	if err != nil {
+		return nil, err
+	}
+	// Older restic versions (and pre-0.17 backups) omit the snapshot summary.
+	// Fill Size/Files via `restic stats` so the UI does not show "—".
+	r.fillMissingSnapshotSizes(ctx, repo, snaps, missing)
+	return snaps, nil
+}
+
+// fillMissingSnapshotSizes runs `restic stats --mode restore-size` for snapshots
+// that have no stored summary. Failures are ignored per-snapshot so a slow or
+// unreachable stats call does not break the list.
+func (r *resticRunner) fillMissingSnapshotSizes(ctx context.Context, repo *Repository, snaps []Snapshot, missing []int) {
+	if len(missing) == 0 {
+		return
+	}
+	const workers = 4
+	sem := make(chan struct{}, workers)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	for _, idx := range missing {
+		idx := idx
+		if idx < 0 || idx >= len(snaps) || snaps[idx].ID == "" {
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			defer func() { <-sem }()
+
+			size, files, err := r.snapshotStats(ctx, repo, snaps[idx].ID)
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			snaps[idx].SizeBytes = int64Ptr(size)
+			snaps[idx].FileCount = int64Ptr(files)
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+}
+
+func (*resticRunner) snapshotStats(ctx context.Context, repo *Repository, snapshotID string) (size, files int64, err error) {
+	cmd, err := resticCommand(ctx, repo, "stats", "--mode", "restore-size", "--json", snapshotID)
+	if err != nil {
+		return 0, 0, err
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return 0, 0, classifyRepoError(string(out))
+	}
+	// restic may print progress lines before the JSON object; take the last '{…}'.
+	raw := strings.TrimSpace(string(out))
+	if i := strings.LastIndex(raw, "{"); i >= 0 {
+		raw = raw[i:]
+	}
+	var st resticStats
+	if err := json.Unmarshal([]byte(raw), &st); err != nil {
+		return 0, 0, fmt.Errorf("could not parse snapshot stats: %w", err)
+	}
+	return st.TotalSize, st.TotalFileCount, nil
 }
 
 func (*resticRunner) Unlock(ctx context.Context, repo *Repository) error {

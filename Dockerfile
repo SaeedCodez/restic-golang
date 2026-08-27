@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 #
 # Production image for Coolify (Dockerfile build pack).
 # Runtime: restic-web on :8080 with restic on PATH; restic-webctl for CLI/agents.
@@ -20,8 +19,19 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/restic-
 
 FROM debian:bookworm-slim
 
+# Debian's restic package is far behind (0.14). Size/Files in the UI need
+# restic >= 0.17, which stores a snapshot summary. Install the official binary.
+ARG RESTIC_VERSION=0.19.1
+ARG TARGETARCH
 RUN apt-get update -y \
-  && apt-get install -y --no-install-recommends ca-certificates curl restic \
+  && apt-get install -y --no-install-recommends ca-certificates curl bzip2 \
+  && ARCH="${TARGETARCH:-$(dpkg --print-architecture 2>/dev/null || uname -m)}" \
+  && case "$ARCH" in x86_64) ARCH=amd64 ;; aarch64) ARCH=arm64 ;; esac \
+  && case "$ARCH" in amd64|arm64|arm|386) ;; *) echo "unsupported TARGETARCH=$ARCH" >&2; exit 1 ;; esac \
+  && curl -fsSL "https://github.com/restic/restic/releases/download/v${RESTIC_VERSION}/restic_${RESTIC_VERSION}_linux_${ARCH}.bz2" \
+    | bunzip2 > /usr/local/bin/restic \
+  && chmod +x /usr/local/bin/restic \
+  && restic version \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

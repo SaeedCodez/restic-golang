@@ -25,6 +25,8 @@ case "$cmd" in
   "unlock") echo "successfully removed 0 locks"; exit 0 ;;
   "snapshots")
     if [ -f "$repo/snaps.json" ]; then cat "$repo/snaps.json"; else echo "[]"; fi; exit 0 ;;
+  "stats")
+    echo '{"total_size":2048,"total_file_count":4,"snapshots_count":1}'; exit 0 ;;
   "backup")
     src="$1"
     if [ ! -f "$repo/config" ]; then
@@ -113,10 +115,32 @@ func TestRealRunnerAgainstFakeRestic(t *testing.T) {
 		t.Fatal("stderr warning not captured as a warn log line")
 	}
 
-	// Snapshots list.
+	// Snapshots list (summary present → size/files filled without stats).
 	snaps, err := r.Snapshots(ctx, repo, "")
 	if err != nil || len(snaps) != 1 {
 		t.Fatalf("Snapshots: %v (n=%d)", err, len(snaps))
+	}
+	if snaps[0].SizeBytes == nil || *snaps[0].SizeBytes != 2048 {
+		t.Fatalf("snapshot size: %+v", snaps[0].SizeBytes)
+	}
+	if snaps[0].FileCount == nil || *snaps[0].FileCount != 4 {
+		t.Fatalf("snapshot files: %+v", snaps[0].FileCount)
+	}
+
+	// Snapshots without a stored summary are backfilled via `restic stats`.
+	noSummary := `[{"id":"deadbeefcafe0001","short_id":"deadbeef","time":"2026-01-01T00:00:00Z","paths":["/x"],"hostname":"fake","tags":["t"]}]`
+	if err := os.WriteFile(filepath.Join(repoDir, "snaps.json"), []byte(noSummary), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	snaps, err = r.Snapshots(ctx, repo, "")
+	if err != nil || len(snaps) != 1 {
+		t.Fatalf("Snapshots backfill: %v (n=%d)", err, len(snaps))
+	}
+	if snaps[0].SizeBytes == nil || *snaps[0].SizeBytes != 2048 {
+		t.Fatalf("backfilled size: %+v", snaps[0].SizeBytes)
+	}
+	if snaps[0].FileCount == nil || *snaps[0].FileCount != 4 {
+		t.Fatalf("backfilled files: %+v", snaps[0].FileCount)
 	}
 
 	// Restore writes files into the target.
