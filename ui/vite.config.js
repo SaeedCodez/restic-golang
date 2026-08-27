@@ -12,7 +12,8 @@ export default defineConfig({
     alias: { "@": path.resolve(import.meta.dirname, "./src") },
   },
   build: {
-    outDir: path.resolve(import.meta.dirname, "../web"),
+    // Embedded by cmd/restic-web/main.go (`//go:embed web`).
+    outDir: path.resolve(import.meta.dirname, "../cmd/restic-web/web"),
     emptyOutDir: true,
     // One chunk on purpose: the app is served from localhost by the same binary,
     // so splitting would only trade an instant load for extra loading states.

@@ -23,24 +23,30 @@ import { fmtBytes, fmtCount, fmtRelative, fmtTime, shortId } from "@/lib/format"
 import { handleStartResponse } from "@/lib/start-run";
 
 /**
- * RestoreDialog collects the one thing a restore needs that the app cannot
- * infer: where to put the files. Download needs nothing, but shares the flow so
- * both actions read the same way.
+ * RestoreDialog picks where files go. From a job page, that defaults to the
+ * job's folder; the optional checkbox unlocks a different absolute path.
+ * From a repository page (no job folder), the path field is required.
  */
-function RestoreDialog({ open, onOpenChange, snapshot, repositoryId }) {
+function RestoreDialog({ open, onOpenChange, snapshot, repositoryId, defaultTarget = "" }) {
   const navigate = useNavigate();
+  const hasDefault = Boolean(defaultTarget && defaultTarget.trim());
+  const [custom, setCustom] = React.useState(false);
   const [target, setTarget] = React.useState("");
   const [busy, setBusy] = React.useState(false);
 
   React.useEffect(() => {
-    if (open) setTarget("");
-  }, [open]);
+    if (!open) return;
+    setCustom(!hasDefault);
+    setTarget(hasDefault ? defaultTarget.trim() : "");
+  }, [open, hasDefault, defaultTarget]);
+
+  const destination = (custom ? target : defaultTarget).trim();
 
   const start = async (e) => {
     e.preventDefault();
-    if (!target.trim()) return;
+    if (!destination) return;
     setBusy(true);
-    const res = await Repositories.restore(repositoryId, snapshot.id, target.trim());
+    const res = await Repositories.restore(repositoryId, snapshot.id, destination);
     setBusy(false);
     if (handleStartResponse(res, navigate, "Could not start the restore.")) {
       onOpenChange(false);
@@ -54,26 +60,69 @@ function RestoreDialog({ open, onOpenChange, snapshot, repositoryId }) {
           <DialogHeader>
             <DialogTitle>Restore snapshot {shortId(snapshot?.id)}</DialogTitle>
             <DialogDescription>
-              restic writes the snapshot's files into this folder. Choose somewhere empty —
-              existing files with the same names are overwritten.
+              {hasDefault
+                ? "Files go back into this job's folder by default. Existing files with the same names are overwritten."
+                : "restic writes the snapshot's files into this folder. Choose somewhere empty — existing files with the same names are overwritten."}
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-2">
-            <Label htmlFor="restore-target">Restore into (absolute path)</Label>
-            <Input
-              id="restore-target"
-              value={target}
-              onChange={(e) => setTarget(e.target.value)}
-              placeholder="/home/you/restored-files"
-              className="font-mono text-xs"
-              autoFocus
-            />
+
+          <div className="space-y-3">
+            {hasDefault && !custom ? (
+              <div className="space-y-1.5">
+                <Label>Restore into</Label>
+                <p
+                  className="rounded-md border border-border bg-muted/40 px-3 py-2 font-mono text-xs break-all"
+                  title={defaultTarget.trim()}
+                >
+                  {defaultTarget.trim()}
+                </p>
+              </div>
+            ) : null}
+
+            {hasDefault ? (
+              <label className="flex cursor-pointer items-center justify-between gap-3 rounded-md border border-border px-3 py-2.5">
+                <div>
+                  <p className="text-sm font-medium">Restore to a different path</p>
+                  <p className="text-[13px] text-muted-foreground">
+                    {custom ? "Enter an absolute path below" : "Keep the job folder above"}
+                  </p>
+                </div>
+                <input
+                  type="checkbox"
+                  className="size-4 accent-foreground"
+                  checked={custom}
+                  onChange={(e) => {
+                    const on = e.target.checked;
+                    setCustom(on);
+                    if (on && !target.trim()) setTarget(defaultTarget.trim());
+                  }}
+                  disabled={busy}
+                />
+              </label>
+            ) : null}
+
+            {!hasDefault || custom ? (
+              <div className="space-y-2">
+                <Label htmlFor="restore-target">
+                  {hasDefault ? "Different path (absolute)" : "Restore into (absolute path)"}
+                </Label>
+                <Input
+                  id="restore-target"
+                  value={target}
+                  onChange={(e) => setTarget(e.target.value)}
+                  placeholder="/home/you/restored-files"
+                  className="font-mono text-xs"
+                  autoFocus={!hasDefault || custom}
+                />
+              </div>
+            ) : null}
           </div>
+
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={busy || !target.trim()}>
+            <Button type="submit" disabled={busy || !destination}>
               {busy ? "Starting…" : "Start restore"}
             </Button>
           </DialogFooter>
@@ -94,6 +143,8 @@ export function SnapshotsPanel({
   load,
   repositoryId,
   reloadKey,
+  /** When set (job page), restore defaults to this absolute folder path. */
+  defaultRestoreTarget,
 }) {
   const navigate = useNavigate();
   const [state, setState] = React.useState({ loading: true, payload: null });
@@ -227,6 +278,7 @@ export function SnapshotsPanel({
           onOpenChange={(open) => !open && setRestoring(null)}
           snapshot={restoring}
           repositoryId={repositoryId}
+          defaultTarget={defaultRestoreTarget}
         />
       ) : null}
     </Card>

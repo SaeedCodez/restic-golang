@@ -163,6 +163,7 @@ export default function JobDetail() {
           load={loadSnapshots}
           repositoryId={job.repositoryId}
           reloadKey={runsVersion}
+          defaultRestoreTarget={job.folderPath}
         />
       </div>
     </Page>
