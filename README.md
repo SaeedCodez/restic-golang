@@ -82,13 +82,13 @@ A few things worth knowing from the screenshots above:
 One command brings up the web app and its database (no local Postgres install):
 
 ```sh
+cp docker-compose.override.example.yml docker-compose.override.yml   # publish :8080 locally
 docker compose up --build
-# Local port mapping: cp docker-compose.override.example.yml docker-compose.override.yml
 ```
 
 Open http://127.0.0.1:8080. Default DB user/password/db are all `restic`
 (override with `SERVICE_PASSWORD_DB` if you like). Coolify uses the same
-`docker-compose.yaml` with its Compose build pack.
+`docker-compose.yaml` with its Compose build pack (no host port bind; Traefik proxies).
 
 ### Native Go (local Postgres)
 
