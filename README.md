@@ -79,7 +79,7 @@ A few things worth knowing from the screenshots above:
 
 ```sh
 cp .env.example .env   # once — then edit DATABASE_URL for your local Postgres
-go run .
+go run ./cmd/restic-web
 ```
 
 The app loads `.env` from the working directory on startup (real environment
@@ -91,7 +91,7 @@ Settings. Migrations run automatically on startup.
 Flags:
 
 ```sh
-go run . -addr 127.0.0.1:9000 -data ./data
+go run ./cmd/restic-web -addr 127.0.0.1:9000 -data ./data
 ```
 
 - `-addr` — address to listen on.
