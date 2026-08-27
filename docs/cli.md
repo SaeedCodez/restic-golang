@@ -170,8 +170,11 @@ restic-webctl repo init <id|name> [--wait]
 restic-webctl repo unlock <id|name>
 restic-webctl repo snapshots <id|name>
 restic-webctl repo restore <id|name> --snapshot ID --target PATH [--wait]
+# Restore replaces the destination: snapshot files overwrite, extras are deleted.
 # When PATH equals a path stored in the snapshot (usual job-folder restore),
-# the app uses restic --target / so files land in place, not nested under PATH.
+# the app uses restic --target / --include PATH so files land in place and
+# extras under PATH are removed (restic forbids --delete with --target /
+# unless a filter is set).
 restic-webctl repo download <id|name> --snapshot ID [--wait]
 restic-webctl repo forget <id|name> --snapshot ID [--wait]
 restic-webctl repo reset <id|name> [--wait]

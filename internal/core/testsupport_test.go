@@ -69,6 +69,8 @@ type fakeRunner struct {
 	// restic writing files there (used to exercise the download zip).
 	onRestore func(target string)
 
+	restoreCalls []restoreCall
+
 	// streamFn drives Backup/Restore/Forget. If nil, the op succeeds immediately.
 	streamFn func(ctx context.Context, kind RunKind, sink RunSink) (int, error)
 
@@ -86,6 +88,12 @@ type forgetCall struct {
 
 type forgetSnapshotsCall struct {
 	IDs []string
+}
+
+type restoreCall struct {
+	SnapshotID string
+	Target     string
+	Include    []string
 }
 
 func (f *fakeRunner) recordedTags() []string {
@@ -130,8 +138,15 @@ func (f *fakeRunner) Backup(ctx context.Context, repo *Repository, source string
 	return 0, nil
 }
 
-func (f *fakeRunner) Restore(ctx context.Context, repo *Repository, snapshotID, target string, sink RunSink) (int, error) {
+func (f *fakeRunner) Restore(ctx context.Context, repo *Repository, snapshotID, target string, include []string, sink RunSink) (int, error) {
 	sink.PID(4242, "faketoken")
+	f.mu.Lock()
+	f.restoreCalls = append(f.restoreCalls, restoreCall{
+		SnapshotID: snapshotID,
+		Target:     target,
+		Include:    append([]string(nil), include...),
+	})
+	f.mu.Unlock()
 	if f.onRestore != nil {
 		f.onRestore(target)
 	}
@@ -139,6 +154,14 @@ func (f *fakeRunner) Restore(ctx context.Context, repo *Repository, snapshotID, 
 		return f.streamFn(ctx, KindRestore, sink)
 	}
 	return 0, nil
+}
+
+func (f *fakeRunner) recordedRestores() []restoreCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]restoreCall, len(f.restoreCalls))
+	copy(out, f.restoreCalls)
+	return out
 }
 
 func (f *fakeRunner) Forget(ctx context.Context, repo *Repository, tag string, policy JobRetention, sink RunSink) (int, error) {

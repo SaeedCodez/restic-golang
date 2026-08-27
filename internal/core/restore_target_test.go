@@ -3,9 +3,73 @@ package core
 import (
 	"context"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestPlanResticRestore(t *testing.T) {
+	folder := "/docker-volumes/site_wordpress-files/_data"
+	cases := []struct {
+		name      string
+		requested string
+		paths     []string
+		wantTgt   string
+		wantInc   []string
+	}{
+		{"in-place exact", folder, []string{folder}, "/", []string{folder}},
+		{"in-place trailing slash", folder + "/", []string{folder}, "/", []string{folder}},
+		{"custom other dir", "/tmp/restore-copy", []string{folder}, "/tmp/restore-copy", nil},
+		{"no paths keeps requested", folder, nil, folder, nil},
+		{"root with snapshot paths", "/", []string{folder, "/other"}, "/", []string{folder, "/other"}},
+		{"root without paths", "/", nil, "/", nil},
+		{"multi-path match first", "/a", []string{"/a", "/b"}, "/", []string{"/a"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := planResticRestore(tc.requested, tc.paths)
+			if got.Target != tc.wantTgt {
+				t.Fatalf("target = %q, want %q", got.Target, tc.wantTgt)
+			}
+			if len(got.Include) != len(tc.wantInc) {
+				t.Fatalf("include = %v, want %v", got.Include, tc.wantInc)
+			}
+			for i := range tc.wantInc {
+				if got.Include[i] != tc.wantInc[i] {
+					t.Fatalf("include = %v, want %v", got.Include, tc.wantInc)
+				}
+			}
+		})
+	}
+}
+
+func TestRestoreArgs(t *testing.T) {
+	got, err := restoreArgs("snap1", "/tmp/out", nil)
+	if err != nil {
+		t.Fatalf("custom: %v", err)
+	}
+	want := []string{"restore", "snap1", "--target", "/tmp/out", "--delete", "--json"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("custom args = %v, want %v", got, want)
+	}
+
+	got, err = restoreArgs("snap1", "/", []string{"/data/folder"})
+	if err != nil {
+		t.Fatalf("in-place: %v", err)
+	}
+	want = []string{"restore", "snap1", "--target", "/", "--delete", "--json", "--include", "/data/folder"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("in-place args = %v, want %v", got, want)
+	}
+
+	if _, err := restoreArgs("snap1", "/", nil); err == nil {
+		t.Fatal("root without include should fail")
+	}
+	if _, err := restoreArgs("snap1", "/", []string{"", "  "}); err == nil {
+		t.Fatal("root with empty include should fail")
+	}
+}
 
 func TestResolveResticRestoreTarget(t *testing.T) {
 	folder := "/docker-volumes/site_wordpress-files/_data"
@@ -108,6 +172,13 @@ func TestStartRestoreInPlaceUsesRootTarget(t *testing.T) {
 	if gotTarget != "/" {
 		t.Fatalf("Runner.Restore target = %q, want /", gotTarget)
 	}
+	calls := fake.recordedRestores()
+	if len(calls) != 1 {
+		t.Fatalf("restore calls = %d, want 1", len(calls))
+	}
+	if !reflect.DeepEqual(calls[0].Include, []string{folder}) {
+		t.Fatalf("restore include = %v, want [%s]", calls[0].Include, folder)
+	}
 }
 
 func TestStartRestoreCustomKeepsTarget(t *testing.T) {
@@ -140,5 +211,24 @@ func TestStartRestoreCustomKeepsTarget(t *testing.T) {
 	}
 	if gotTarget != custom {
 		t.Fatalf("Runner.Restore target = %q, want %q", gotTarget, custom)
+	}
+	calls := fake.recordedRestores()
+	if len(calls) != 1 {
+		t.Fatalf("restore calls = %d, want 1", len(calls))
+	}
+	if len(calls[0].Include) != 0 {
+		t.Fatalf("custom restore include = %v, want empty", calls[0].Include)
+	}
+}
+
+func TestStartRestoreRootWithoutPathsRefused(t *testing.T) {
+	fake := &fakeRunner{installed: true}
+	app := newRunTestApp(t, fake)
+	repo, _ := app.Repos.Create(Repository{Meta: Meta{Name: "r"}, BackendType: "Local", LocalPath: "/tmp/r", Password: "pw"})
+	if _, err := app.Coord.StartRestore(repo.ID, "missing", "/"); err == nil {
+		t.Fatal("restore to / without snapshot paths should be refused")
+	}
+	if n := len(fake.recordedRestores()); n != 0 {
+		t.Fatalf("restic restore should not have been invoked, got %d calls", n)
 	}
 }

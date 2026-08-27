@@ -71,10 +71,12 @@ A few things worth knowing from the screenshots above:
 2. **PostgreSQL** 16 or newer on your machine — the app stores repositories, jobs,
    runs and logs there. On macOS: `brew install postgresql@17 && brew services start postgresql@17`,
    then `createdb restic`.
-3. **restic** on your `PATH`. The app detects when it is missing and shows a clear
-   message. Install it with `brew install restic`, `apt install restic`,
-   `dnf install restic`, `scoop install restic`, or a binary from
-   <https://github.com/restic/restic/releases>. Verify with `restic version`.
+3. **restic** 0.17 or newer on your `PATH` (restore uses `--delete`, added in
+   0.17). The app detects when it is missing and shows a clear message. Install
+   it with `brew install restic`, `dnf install restic`, `scoop install restic`,
+   or a binary from <https://github.com/restic/restic/releases>. Debian/Ubuntu
+   `apt install restic` may still ship 0.14 — prefer the official binary.
+   Verify with `restic version`.
 
 ## How to run
 
@@ -322,7 +324,7 @@ stored choice is applied before first paint, so the page never flashes.
 | Initialize      | `restic -r <repo> init` (also run automatically by a backup against an uninitialized repository) |
 | Backup          | `restic -r <repo> backup <src> --tag resticweb-job:<id> --json` |
 | List snapshots  | `restic -r <repo> snapshots [--tag …] --json`           |
-| Restore         | `restic restore <id> --target … --json` (in-place uses `/`) |
+| Restore         | `restic restore <id> --target … --delete --json` (in-place uses `/` plus `--include` of the folder) |
 | Download (zip)  | restore into a temp workspace, then stream a zip        |
 | Unlock          | `restic -r <repo> unlock` (removes only stale locks)    |
 | Retention       | `restic -r <repo> forget --tag … --keep-* --prune --json` |
@@ -348,6 +350,10 @@ stored choice is applied before first paint, so the page never flashes.
 - Deleting a job, folder, or repository from the app removes the catalog
   entry only. To delete restic data, forget a snapshot, forget a job's
   snapshots (optionally while deleting the job), or empty a repository.
+- **Restore replaces the destination.** Files from the snapshot overwrite
+  matching paths, and files that are not in the snapshot are deleted
+  (`restic restore --delete`). In-place restore into a job folder is limited to
+  that folder (`--include`) so the rest of the filesystem is left alone.
 - A browser cannot hand the server a real local path, so source and target
   folders are entered as absolute-path text fields. A mistyped path surfaces as a
   failed run rather than as validation.

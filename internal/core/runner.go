@@ -48,8 +48,11 @@ type Runner interface {
 	// returns restic's exit code. err is non-nil only if restic could not be
 	// started; a non-zero exit is reported via the code, not err.
 	Backup(ctx context.Context, repo *Repository, source string, tags []string, sink RunSink) (int, error)
-	// Restore streams a restore of snapshotID into target, returning the exit code.
-	Restore(ctx context.Context, repo *Repository, snapshotID, target string, sink RunSink) (int, error)
+	// Restore streams a restore of snapshotID into target, replacing the
+	// destination: snapshot files overwrite, and files not in the snapshot are
+	// deleted. include is passed as restic --include patterns; it is required
+	// when target is "/" (restic refuses --target / --delete without a filter).
+	Restore(ctx context.Context, repo *Repository, snapshotID, target string, include []string, sink RunSink) (int, error)
 	// Forget applies a keep-policy to snapshots with the given tag, then prunes
 	// unreferenced data (`restic forget --prune`). Returns restic's exit code.
 	Forget(ctx context.Context, repo *Repository, tag string, policy JobRetention, sink RunSink) (int, error)
@@ -236,8 +239,12 @@ func (*resticRunner) Backup(ctx context.Context, repo *Repository, source string
 	return streamRestic(ctx, repo, KindBackup, sink, args...)
 }
 
-func (*resticRunner) Restore(ctx context.Context, repo *Repository, snapshotID, target string, sink RunSink) (int, error) {
-	return streamRestic(ctx, repo, KindRestore, sink, "restore", snapshotID, "--target", target, "--json")
+func (*resticRunner) Restore(ctx context.Context, repo *Repository, snapshotID, target string, include []string, sink RunSink) (int, error) {
+	args, err := restoreArgs(snapshotID, target, include)
+	if err != nil {
+		return 0, err
+	}
+	return streamRestic(ctx, repo, KindRestore, sink, args...)
 }
 
 func (*resticRunner) Forget(ctx context.Context, repo *Repository, tag string, policy JobRetention, sink RunSink) (int, error) {

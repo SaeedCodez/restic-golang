@@ -39,8 +39,13 @@ case "$cmd" in
     printf '[{"id":"deadbeefcafe0001","short_id":"deadbeef","time":"2026-01-01T00:00:00Z","paths":["%s"],"hostname":"fake","tags":["t"],"summary":{"total_bytes_processed":2048,"total_files_processed":4}}]\n' "$src" > "$repo/snaps.json"
     exit 0 ;;
   "restore")
-    tgt=""; prev=""
-    for a in "$@"; do if [ "$prev" = "--target" ]; then tgt="$a"; fi; prev="$a"; done
+    tgt=""; prev=""; has_delete=0
+    for a in "$@"; do
+      if [ "$prev" = "--target" ]; then tgt="$a"; fi
+      if [ "$a" = "--delete" ]; then has_delete=1; fi
+      prev="$a"
+    done
+    if [ "$has_delete" != 1 ]; then echo "missing --delete" 1>&2; exit 1; fi
     mkdir -p "$tgt"; echo "hello" > "$tgt/a.txt"
     echo '{"message_type":"status","percent_done":1,"total_files":4,"files_restored":4,"total_bytes":2048,"bytes_restored":2048}'
     echo '{"message_type":"summary","total_files":4,"files_restored":4,"total_bytes":2048,"bytes_restored":2048,"total_duration":0.1}'
@@ -146,7 +151,7 @@ func TestRealRunnerAgainstFakeRestic(t *testing.T) {
 	// Restore writes files into the target.
 	tgt := filepath.Join(t.TempDir(), "restore")
 	sink2 := &captureSink{}
-	code, err = r.Restore(ctx, repo, snaps[0].ID, tgt, sink2)
+	code, err = r.Restore(ctx, repo, snaps[0].ID, tgt, nil, sink2)
 	if err != nil || code != 0 {
 		t.Fatalf("Restore: code=%d err=%v", code, err)
 	}

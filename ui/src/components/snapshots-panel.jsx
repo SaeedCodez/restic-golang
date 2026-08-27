@@ -62,8 +62,8 @@ function RestoreDialog({ open, onOpenChange, snapshot, repositoryId, defaultTarg
             <DialogTitle>Restore snapshot {shortId(snapshot?.id)}</DialogTitle>
             <DialogDescription>
               {hasDefault
-                ? "Files are restored in place into this job's folder by default (original paths). Existing files with the same names are overwritten."
-                : "Files are written under this folder using the snapshot's full paths. Prefer an empty directory — existing files with the same names are overwritten."}
+                ? "This snapshot replaces the job folder: files from the backup overwrite matching files, and anything not in the snapshot is deleted."
+                : "Files are written under this folder using the snapshot's full paths. Matching files are overwritten, and anything not in the snapshot is deleted."}
             </DialogDescription>
           </DialogHeader>
 
@@ -86,8 +86,8 @@ function RestoreDialog({ open, onOpenChange, snapshot, repositoryId, defaultTarg
                   <p className="text-sm font-medium">Restore to a different path</p>
                   <p className="text-[13px] text-muted-foreground">
                     {custom
-                      ? "Snapshot paths are recreated under the path you enter"
-                      : "Keep the job folder above (in-place)"}
+                      ? "Snapshot paths are recreated under the path you enter; extra files there are deleted"
+                      : "Keep the job folder above (in-place replace)"}
                   </p>
                 </div>
                 <input

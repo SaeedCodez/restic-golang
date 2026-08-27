@@ -167,10 +167,13 @@ func (c *Coordinator) StartInit(repoID string) (*Run, error) {
 }
 
 // StartRestore restores a snapshot into a target folder as a tracked run.
+// The destination is replaced: files from the snapshot overwrite, and files
+// that are not in the snapshot are deleted.
 //
 // When target equals a path stored in the snapshot (typical "restore into this
 // job's folder"), restic is invoked with --target / so absolute snapshot paths
-// are written back in place instead of nested under target.
+// are written back in place instead of nested under target, and --include of
+// that folder so --delete cannot touch the rest of the filesystem.
 func (c *Coordinator) StartRestore(repoID, snapshotID, target string) (*Run, error) {
 	repo, ok := c.app.Repos.Get(repoID)
 	if !ok {
@@ -188,13 +191,16 @@ func (c *Coordinator) StartRestore(repoID, snapshotID, target string) (*Run, err
 	lookupCtx, lookupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	paths := lookupSnapshotPaths(lookupCtx, c.app.Runner, &repo, snapshotID)
 	lookupCancel()
-	resticTarget := resolveResticRestoreTarget(target, paths)
+	plan := planResticRestore(target, paths)
+	if _, err := restoreArgs(snapshotID, plan.Target, plan.Include); err != nil {
+		return nil, validf("%s", err.Error())
+	}
 
 	// Ensure the user-facing destination exists. In-place restores use --target /;
 	// MkdirAll on the original folder is best-effort (restic creates missing dirs).
 	if target != "/" {
 		if err := os.MkdirAll(target, 0o755); err != nil {
-			if resticTarget != "/" {
+			if !isResticRootTarget(plan.Target) {
 				return nil, validf("could not create target folder: %v", err)
 			}
 			log.Printf("restore: could not ensure in-place target %s: %v", target, err)
@@ -202,20 +208,20 @@ func (c *Coordinator) StartRestore(repoID, snapshotID, target string) (*Run, err
 	}
 
 	params := map[string]string{"snapshotId": snapshotID, "target": target}
-	if resticTarget != target {
-		params["resticTarget"] = resticTarget
+	if plan.Target != target {
+		params["resticTarget"] = plan.Target
 	}
 	run := &Run{
 		Kind: KindRestore, Status: StatusStarting, RepositoryID: repo.ID, RepoName: repo.Name,
 		Params: params,
 	}
 	return c.startRun(repo, run, func(ctx context.Context, h *runHandle) (int, error) {
-		if resticTarget == "/" && target != "/" {
-			h.Log("info", "system", "Restoring "+shortID(snapshotID)+" in place to "+target)
+		if isResticRootTarget(plan.Target) && target != "/" {
+			h.Log("info", "system", "Restoring "+shortID(snapshotID)+" in place to "+target+" (replacing folder contents)")
 		} else {
-			h.Log("info", "system", "Restoring "+shortID(snapshotID)+" to "+target)
+			h.Log("info", "system", "Restoring "+shortID(snapshotID)+" to "+target+" (replacing destination contents)")
 		}
-		return c.app.Runner.Restore(ctx, &repo, snapshotID, resticTarget, h)
+		return c.app.Runner.Restore(ctx, &repo, snapshotID, plan.Target, plan.Include, h)
 	})
 }
 
@@ -244,7 +250,7 @@ func (c *Coordinator) StartDownload(repoID, snapshotID string) (*Run, error) {
 		}
 		c.app.Runs.mutate(h.id, true, func(r *Run) { r.Params["target"] = target })
 		h.Log("info", "system", "Preparing download of snapshot "+shortID(snapshotID))
-		return c.app.Runner.Restore(ctx, &repo, snapshotID, target, h)
+		return c.app.Runner.Restore(ctx, &repo, snapshotID, target, nil, h)
 	})
 }
 
