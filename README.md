@@ -87,7 +87,7 @@ docker compose up --build
 
 Open http://127.0.0.1:8080. Default DB user/password/db are all `restic`
 (override with `SERVICE_PASSWORD_DB` if you like). Coolify uses the same
-`docker-compose.yml` with its Compose build pack.
+`docker-compose.yaml` with its Compose build pack.
 
 ### Native Go (local Postgres)
 
