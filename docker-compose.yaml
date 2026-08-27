@@ -27,6 +27,11 @@ services:
     build: .
     # Coolify proxies via Traefik; do not bind the host port (conflicts on shared nodes).
     # For local browser access, use docker-compose.override.yml (see README).
+    #
+    # Root is required to restore into host Docker volumes owned by site users
+    # (e.g. www-data). The image defaults to uid 1001, which can back up those
+    # paths but cannot write them back.
+    user: "0:0"
     expose:
       - "8080"
     environment:
