@@ -25,14 +25,16 @@ services:
 
   app:
     build: .
-    ports:
-      - "8080:8080"
+    # Coolify proxies via Traefik; do not bind the host port (conflicts on shared nodes).
+    # For local browser access, use docker-compose.override.yml (see README).
+    expose:
+      - "8080"
     environment:
       DATABASE_URL: postgres://restic:${SERVICE_PASSWORD_DB:-restic}@db:5432/restic?sslmode=disable
       PORT: "8080"
       ADDR: 0.0.0.0:8080
       RESTIC_WEB_DATA: /app/data
-      # Coolify: generate FQDN and proxy to port 8080 (set domain in Coolify UI).
+      # Coolify: generate FQDN and proxy to port 8080 (set domain in Coolify UI on service "app").
       SERVICE_FQDN_APP_8080:
     volumes:
       - appdata:/app/data

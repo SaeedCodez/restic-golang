@@ -17,3 +17,4 @@
 # to `web/` (which main.go embeds), so `go build` never needs Node.
 /ui/node_modules/
 /ui/dist/
+docker-compose.override.yml

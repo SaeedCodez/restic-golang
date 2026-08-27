@@ -83,6 +83,7 @@ One command brings up the web app and its database (no local Postgres install):
 
 ```sh
 docker compose up --build
+# Local port mapping: cp docker-compose.override.example.yml docker-compose.override.yml
 ```
 
 Open http://127.0.0.1:8080. Default DB user/password/db are all `restic`

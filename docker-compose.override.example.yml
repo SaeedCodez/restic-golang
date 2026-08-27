@@ -1,0 +1,6 @@
+# Copy to docker-compose.override.yml for local `docker compose up`
+# (gitignored). Publishes the app on http://127.0.0.1:8080.
+services:
+  app:
+    ports:
+      - "8080:8080"
