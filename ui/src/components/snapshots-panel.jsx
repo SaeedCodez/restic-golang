@@ -28,7 +28,14 @@ import { handleStartResponse } from "@/lib/start-run";
  * job's folder; the optional checkbox unlocks a different absolute path.
  * From a repository page (no job folder), the path field is required.
  */
-function RestoreDialog({ open, onOpenChange, snapshot, repositoryId, defaultTarget = "" }) {
+function RestoreDialog({
+  open,
+  onOpenChange,
+  snapshot,
+  repositoryId,
+  defaultTarget = "",
+  stay = false,
+}) {
   const navigate = useNavigate();
   const hasDefault = Boolean(defaultTarget && defaultTarget.trim());
   const [custom, setCustom] = React.useState(false);
@@ -49,7 +56,7 @@ function RestoreDialog({ open, onOpenChange, snapshot, repositoryId, defaultTarg
     setBusy(true);
     const res = await Repositories.restore(repositoryId, snapshot.id, destination);
     setBusy(false);
-    if (handleStartResponse(res, navigate, "Could not start the restore.")) {
+    if (handleStartResponse(res, navigate, "Could not start the restore.", { stay })) {
       onOpenChange(false);
     }
   };
@@ -150,6 +157,8 @@ export function SnapshotsPanel({
   defaultRestoreTarget,
   /** When set, allow forgetting every snapshot for this job. */
   jobId,
+  /** Keep the user on this page after starting restore/download/forget. */
+  stay = false,
 }) {
   const navigate = useNavigate();
   const confirm = useConfirm();
@@ -173,7 +182,7 @@ export function SnapshotsPanel({
     setDownloadingId(snapshot.id);
     const res = await Repositories.download(repositoryId, snapshot.id);
     setDownloadingId(null);
-    handleStartResponse(res, navigate, "Could not start the download.");
+    handleStartResponse(res, navigate, "Could not start the download.", { stay });
   };
 
   const startForget = async (snapshot) => {
@@ -189,7 +198,7 @@ export function SnapshotsPanel({
     setForgettingId(snapshot.id);
     const res = await Repositories.forget(repositoryId, snapshot.id);
     setForgettingId(null);
-    handleStartResponse(res, navigate, "Could not delete the snapshot.");
+    handleStartResponse(res, navigate, "Could not delete the snapshot.", { stay });
   };
 
   const startForgetAll = async () => {
@@ -204,7 +213,7 @@ export function SnapshotsPanel({
     setForgettingAll(true);
     const res = await Jobs.forget(jobId);
     setForgettingAll(false);
-    handleStartResponse(res, navigate, "Could not delete this job's snapshots.");
+    handleStartResponse(res, navigate, "Could not delete this job's snapshots.", { stay });
   };
 
   const payload = state.payload;
@@ -342,6 +351,7 @@ export function SnapshotsPanel({
           snapshot={restoring}
           repositoryId={repositoryId}
           defaultTarget={defaultRestoreTarget}
+          stay={stay}
         />
       ) : null}
     </Card>

@@ -68,7 +68,7 @@ func (c *CLI) runList(args []string) int {
 		}
 		jobID = ref.ID
 	}
-	runs, total := c.app.Runs.Query(*status, *kind, jobID, *limit)
+	runs, total := c.app.Runs.Query(*status, *kind, jobID, *limit, 0)
 	return c.printRunList(runs, total)
 }
 

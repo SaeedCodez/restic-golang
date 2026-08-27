@@ -74,13 +74,23 @@ func (s *Server) handleJobRuns(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, http.StatusNotFound, "not_found", "job not found")
 		return
 	}
-	runs, total := s.app.Runs.Query("", "", r.PathValue("id"), queryLimit(r))
+	runs, total := s.app.Runs.Query("", "", r.PathValue("id"), queryLimit(r), queryOffset(r))
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "runs": runs, "total": total})
 }
 
 // queryLimit reads a positive ?limit=, or 0 for "no limit".
 func queryLimit(r *http.Request) int {
 	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 0
+}
+
+// queryOffset reads a non-negative ?offset=, or 0 when absent/invalid.
+func queryOffset(r *http.Request) int {
+	if v := r.URL.Query().Get("offset"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			return n
 		}
@@ -133,12 +143,11 @@ func (s *Server) handleRunStop(w http.ResponseWriter, r *http.Request) {
 // handleRunList returns run history, newest first, with optional filters:
 //
 //	?status=active|finished|<exact status>   ?kind=backup|restore|init|download
-//	?jobId=<id>                              ?limit=<n>
+//	?jobId=<id>                              ?limit=<n>   ?offset=<n>
 //
-// `total` is the match count before the limit, so the UI can say "showing 20 of
-// 137" rather than silently truncating.
+// `total` is the match count before limit/offset, so the UI can paginate.
 func (s *Server) handleRunList(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	runs, total := s.app.Runs.Query(q.Get("status"), q.Get("kind"), q.Get("jobId"), queryLimit(r))
+	runs, total := s.app.Runs.Query(q.Get("status"), q.Get("kind"), q.Get("jobId"), queryLimit(r), queryOffset(r))
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "runs": runs, "total": total})
 }

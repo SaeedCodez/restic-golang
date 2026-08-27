@@ -1,9 +1,11 @@
 import * as React from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { ArrowRight, Play, Plus } from "lucide-react";
+import { ArrowRight, Eye, Play, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { ListPagination } from "@/components/pagination";
+import { PAGE_SIZE, pageSlice } from "@/lib/pagination";
 import {
   Dialog,
   DialogContent,
@@ -131,12 +133,18 @@ function JobCard({ job, onRan }) {
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
+          <Button size="sm" asChild>
+            <Link to={`/jobs/${job.id}`}>
+              <Eye />
+              View job
+            </Link>
+          </Button>
           {running ? (
-            <Button variant="outline" size="sm" asChild>
+            <Button variant="secondary" size="sm" asChild>
               <Link to={`/runs/${live.id}`}>View progress</Link>
             </Button>
           ) : (
-            <Button size="sm" onClick={runNow} disabled={starting}>
+            <Button variant="secondary" size="sm" onClick={runNow} disabled={starting}>
               <Play />
               {starting ? "Starting…" : "Run backup"}
             </Button>
@@ -295,6 +303,7 @@ export default function JobsRoute() {
   const location = useLocation();
   const navigate = useNavigate();
   const [dialogOpen, setDialogOpen] = React.useState(false);
+  const [page, setPage] = React.useState(1);
 
   const loader = React.useCallback(async () => {
     const [jobsR, foldersR, reposR] = await Promise.all([
@@ -332,6 +341,11 @@ export default function JobsRoute() {
   const folders = data?.folders || [];
   const repositories = data?.repositories || [];
   const canCreate = folders.length > 0 && repositories.length > 0;
+  const paged = pageSlice(jobs, page, PAGE_SIZE);
+
+  React.useEffect(() => {
+    if (page !== paged.page) setPage(paged.page);
+  }, [page, paged.page]);
 
   return (
     <Page>
@@ -377,9 +391,15 @@ export default function JobsRoute() {
         />
       ) : (
         <div className="space-y-3">
-          {jobs.map((job) => (
+          {paged.items.map((job) => (
             <JobCard key={job.id} job={job} onRan={reload} />
           ))}
+          <ListPagination
+            page={paged.page}
+            pageSize={PAGE_SIZE}
+            total={paged.total}
+            onPageChange={setPage}
+          />
         </div>
       )}
 

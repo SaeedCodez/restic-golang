@@ -17,9 +17,11 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { EmptyState } from "@/components/empty";
+import { ListPagination } from "@/components/pagination";
 import { Page, PageHeader } from "@/components/page";
 import { useConfirm } from "@/components/confirm";
 import { Folders, errorOf } from "@/lib/api";
+import { PAGE_SIZE, pageSlice } from "@/lib/pagination";
 import { useFetch } from "@/lib/use-fetch";
 
 function FolderDialog({ open, onOpenChange, folder, onSaved }) {
@@ -113,6 +115,7 @@ export default function FoldersRoute() {
     open: Boolean(location.state?.create),
     folder: null,
   });
+  const [page, setPage] = React.useState(1);
 
   const loader = React.useCallback(async () => {
     const res = await Folders.list();
@@ -143,6 +146,11 @@ export default function FoldersRoute() {
   };
 
   const folders = data || [];
+  const paged = pageSlice(folders, page, PAGE_SIZE);
+
+  React.useEffect(() => {
+    if (page !== paged.page) setPage(paged.page);
+  }, [page, paged.page]);
 
   return (
     <Page>
@@ -178,7 +186,7 @@ export default function FoldersRoute() {
         />
       ) : (
         <div className="space-y-3">
-          {folders.map((folder) => (
+          {paged.items.map((folder) => (
             <Card key={folder.id} className="transition-colors hover:border-input">
               <div className="flex flex-wrap items-center gap-3 p-4">
                 <span className="grid size-8 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
@@ -222,6 +230,12 @@ export default function FoldersRoute() {
               </div>
             </Card>
           ))}
+          <ListPagination
+            page={paged.page}
+            pageSize={PAGE_SIZE}
+            total={paged.total}
+            onPageChange={setPage}
+          />
         </div>
       )}
 

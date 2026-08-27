@@ -16,8 +16,8 @@ func (c *CLI) cmdActivity(args []string) int {
 		return c.fail(err)
 	}
 
-	active, activeTotal := c.app.Runs.Query("active", "", "", 0)
-	recent, recentTotal := c.app.Runs.Query("finished", "", "", *limit)
+	active, activeTotal := c.app.Runs.Query("active", "", "", 0, 0)
+	recent, recentTotal := c.app.Runs.Query("finished", "", "", *limit, 0)
 
 	if c.cfg.json {
 		return c.writeJSON(map[string]any{

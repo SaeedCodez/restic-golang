@@ -10,9 +10,22 @@ import { kindLabel } from "@/lib/runs";
  * repository and returns 409 `busy` naming the run that holds it. Rather than a
  * dead end, the user gets told which operation is in the way and can jump
  * straight to it.
+ *
+ * Pass `{ stay: true }` to keep the user on the current page (e.g. Job details)
+ * and toast with an optional link to the new run instead of navigating away.
  */
-export function handleStartResponse(res, navigate, fallback = "Could not start.") {
+export function handleStartResponse(res, navigate, fallback = "Could not start.", { stay = false } = {}) {
   if (res.status === 202 && res.body?.runId) {
+    if (stay) {
+      const kind = res.body.run?.kind ? kindLabel(res.body.run.kind) : "Operation";
+      toast.success(`${kind} started`, {
+        action: {
+          label: "Open run",
+          onClick: () => navigate(`/runs/${res.body.runId}`),
+        },
+      });
+      return true;
+    }
     navigate(`/runs/${res.body.runId}`);
     return true;
   }

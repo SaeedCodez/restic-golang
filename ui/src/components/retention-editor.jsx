@@ -34,8 +34,11 @@ const CUSTOM_FIELDS = [
 /**
  * RetentionEditor edits a job's snapshot keep-policy. Enabling applies
  * forget+prune after each successful backup, scoped to this job's tag.
+ *
+ * When `stay` is true, "Apply now" keeps the user on this page and surfaces
+ * the new run in the job Activity section instead of navigating away.
  */
-export function RetentionEditor({ job, onSaved }) {
+export function RetentionEditor({ job, onSaved, stay = false }) {
   const navigate = useNavigate();
   const confirm = useConfirm();
   const [form, setForm] = React.useState(() => retentionFormFromJob(job));
@@ -114,8 +117,9 @@ export function RetentionEditor({ job, onSaved }) {
     setApplying(true);
     const res = await Jobs.retention(job.id);
     setApplying(false);
-    handleStartResponse(res, navigate, "Could not start retention.");
-    onSaved?.();
+    if (handleStartResponse(res, navigate, "Could not start retention.", { stay })) {
+      onSaved?.();
+    }
   };
 
   const policyLine = describeRetentionTitle(retentionPayload(form));

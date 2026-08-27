@@ -422,7 +422,7 @@ func (c *CLI) jobRuns(query string, args []string) int {
 	if err := parseFlagSet(fs, args, helpJob()); err != nil {
 		return c.fail(err)
 	}
-	runs, total := c.app.Runs.Query("", "", job.ID, *limit)
+	runs, total := c.app.Runs.Query("", "", job.ID, *limit, 0)
 	return c.printRunList(runs, total)
 }
 

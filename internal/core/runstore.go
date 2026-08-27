@@ -70,7 +70,7 @@ func (s *RunStore) getDB(id string) (*Run, bool) {
 
 // list returns clones of all runs matching keep, newest first.
 func (s *RunStore) list(keep func(*Run) bool) []*Run {
-	runs, _ := s.Query("", "", "", 0)
+	runs, _ := s.Query("", "", "", 0, 0)
 	if keep == nil {
 		return runs
 	}
@@ -83,9 +83,10 @@ func (s *RunStore) list(keep func(*Run) bool) []*Run {
 	return out
 }
 
-// query returns runs matching optional status/kind/jobId filters, newest first.
-// total is the match count before limit (0 limit means no cap).
-func (s *RunStore) Query(status, kind, jobID string, limit int) ([]*Run, int) {
+// Query returns runs matching optional status/kind/jobId filters, newest first.
+// total is the match count before limit/offset (0 limit means no cap; offset is
+// ignored when limit is 0).
+func (s *RunStore) Query(status, kind, jobID string, limit, offset int) ([]*Run, int) {
 	where, args := runWhere(status, kind, jobID)
 	ctx, cancel := dbCtx()
 	defer cancel()
@@ -99,6 +100,10 @@ func (s *RunStore) Query(status, kind, jobID string, limit int) ([]*Run, int) {
 	if limit > 0 {
 		args = append(args, limit)
 		q += ` LIMIT $` + strconv.Itoa(len(args))
+		if offset > 0 {
+			args = append(args, offset)
+			q += ` OFFSET $` + strconv.Itoa(len(args))
+		}
 	}
 	rows, err := s.Pool.Query(ctx, q, args...)
 	if err != nil {
@@ -305,12 +310,12 @@ func newerFinished(a, b *Run) bool {
 }
 
 func (s *RunStore) runsForJob(jobID string) []*Run {
-	runs, _ := s.Query("", "", jobID, 0)
+	runs, _ := s.Query("", "", jobID, 0, 0)
 	return runs
 }
 
 func (s *RunStore) ActiveRuns() []*Run {
-	runs, _ := s.Query("active", "", "", 0)
+	runs, _ := s.Query("active", "", "", 0, 0)
 	return runs
 }
 

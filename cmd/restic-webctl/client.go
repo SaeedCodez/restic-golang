@@ -96,7 +96,7 @@ func (c *CLI) viewOf(job core.Job) jobView {
 			}
 		}
 	}
-	runs, total := c.app.Runs.Query("", "", job.ID, 1)
+	runs, total := c.app.Runs.Query("", "", job.ID, 1, 0)
 	v.RunCount = total
 	if len(runs) > 0 {
 		v.LastRun = runs[0]

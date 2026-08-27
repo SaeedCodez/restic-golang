@@ -11,14 +11,14 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/empty";
+import { ListPagination } from "@/components/pagination";
 import { Page, PageHeader } from "@/components/page";
 import { ActiveRunsCard } from "@/components/active-runs";
 import { RunHistory } from "@/components/run-history";
 import { Runs } from "@/lib/api";
+import { PAGE_SIZE } from "@/lib/pagination";
 import { useFetch } from "@/lib/use-fetch";
 import { useLive } from "@/lib/live";
-
-const HISTORY_LIMIT = 40;
 
 const KIND_FILTERS = [
   { value: "all", label: "All operations" },
@@ -43,20 +43,33 @@ export default function ActivityRoute() {
   const { activeRuns, runsVersion } = useLive();
   const [kind, setKind] = React.useState("all");
   const [status, setStatus] = React.useState("all");
+  const [page, setPage] = React.useState(1);
 
   const loader = React.useCallback(async () => {
     const res = await Runs.list({
       status: status === "all" ? "finished" : status,
       kind: kind === "all" ? "" : kind,
-      limit: HISTORY_LIMIT,
+      limit: PAGE_SIZE,
+      offset: (page - 1) * PAGE_SIZE,
     });
     return { runs: res.body?.runs || [], total: res.body?.total || 0 };
-  }, [kind, status]);
+  }, [kind, status, page]);
   const { data, loading, reload } = useFetch(loader);
 
   React.useEffect(() => {
     if (runsVersion > 0) reload();
   }, [runsVersion, reload]);
+
+  // Filters change the result set — return to the first page.
+  React.useEffect(() => {
+    setPage(1);
+  }, [kind, status]);
+
+  React.useEffect(() => {
+    if (!data) return;
+    const totalPages = Math.max(1, Math.ceil((data.total || 0) / PAGE_SIZE));
+    if (page > totalPages) setPage(totalPages);
+  }, [data, page]);
 
   React.useEffect(() => {
     document.title = "Activity · restic backup manager";
@@ -87,7 +100,7 @@ export default function ActivityRoute() {
               <CardTitle>History</CardTitle>
               <CardDescription className="mt-1">
                 {total > history.length
-                  ? `Showing the ${history.length} most recent of ${total} finished operations.`
+                  ? `Page ${page} · ${total} finished operations matching these filters.`
                   : "Every finished operation, newest first."}
               </CardDescription>
             </div>
@@ -142,6 +155,16 @@ export default function ActivityRoute() {
               <RunHistory runs={history} showContext />
             )}
           </div>
+          {total > PAGE_SIZE ? (
+            <div className="border-t border-border px-4">
+              <ListPagination
+                page={page}
+                pageSize={PAGE_SIZE}
+                total={total}
+                onPageChange={setPage}
+              />
+            </div>
+          ) : null}
         </Card>
       </div>
     </Page>

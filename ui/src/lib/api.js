@@ -90,7 +90,14 @@ export const Jobs = {
   run: (id) => api.post(`/api/jobs/${id}/run`),
   retention: (id) => api.post(`/api/jobs/${id}/retention`),
   forget: (id, { deleteJob } = {}) => api.post(`/api/jobs/${id}/forget`, { deleteJob: !!deleteJob }),
-  runs: (id) => api.get(`/api/jobs/${id}/runs`),
+  runs: (id, params = {}) => {
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined && v !== null && v !== "") q.set(k, v);
+    }
+    const qs = q.toString();
+    return api.get(`/api/jobs/${id}/runs` + (qs ? "?" + qs : ""));
+  },
   snapshots: (id) => api.get(`/api/jobs/${id}/snapshots`),
 };
 

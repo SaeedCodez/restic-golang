@@ -24,9 +24,11 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { EmptyState } from "@/components/empty";
+import { ListPagination } from "@/components/pagination";
 import { Page, PageHeader } from "@/components/page";
 import { useConfirm } from "@/components/confirm";
 import { Repositories, errorOf } from "@/lib/api";
+import { PAGE_SIZE, pageSlice } from "@/lib/pagination";
 import { useFetch } from "@/lib/use-fetch";
 import { repoLocation } from "@/lib/format";
 
@@ -244,6 +246,7 @@ export default function RepositoriesRoute() {
     open: Boolean(location.state?.create),
     repository: null,
   });
+  const [page, setPage] = React.useState(1);
 
   const loader = React.useCallback(async () => {
     const res = await Repositories.list();
@@ -278,6 +281,11 @@ export default function RepositoriesRoute() {
   };
 
   const repos = data || [];
+  const paged = pageSlice(repos, page, PAGE_SIZE);
+
+  React.useEffect(() => {
+    if (page !== paged.page) setPage(paged.page);
+  }, [page, paged.page]);
 
   return (
     <Page>
@@ -313,7 +321,7 @@ export default function RepositoriesRoute() {
         />
       ) : (
         <div className="space-y-3">
-          {repos.map((repo) => {
+          {paged.items.map((repo) => {
             const Icon = repo.backendType === "S3" ? Cloud : HardDrive;
             return (
               <Card key={repo.id} className="transition-colors hover:border-input">
@@ -368,6 +376,12 @@ export default function RepositoriesRoute() {
               </Card>
             );
           })}
+          <ListPagination
+            page={paged.page}
+            pageSize={PAGE_SIZE}
+            total={paged.total}
+            onPageChange={setPage}
+          />
         </div>
       )}
 

@@ -306,6 +306,14 @@ func TestRunListFiltersAndLimit(t *testing.T) {
 	if runs[0].Kind != KindInit {
 		t.Fatalf("expected newest-first ordering, got %s first", runs[0].Kind)
 	}
+
+	page2, total2 := list("?limit=2&offset=2")
+	if len(page2) != 1 || total2 != 3 {
+		t.Fatalf("limit=2&offset=2: got %d runs, total %d; want 1 and 3", len(page2), total2)
+	}
+	if page2[0].ID == runs[0].ID || page2[0].ID == runs[1].ID {
+		t.Fatalf("offset page overlapped with first page")
+	}
 }
 
 func TestJobRunsRespectsLimit(t *testing.T) {

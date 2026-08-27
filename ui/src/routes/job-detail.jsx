@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { ArrowRight, Play, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -14,6 +14,8 @@ import {
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Breadcrumb, Mono, Page, PageHeader } from "@/components/page";
+import { ActiveRunsCard } from "@/components/active-runs";
+import { ListPagination } from "@/components/pagination";
 import { RunHistory } from "@/components/run-history";
 import { ScheduleEditor } from "@/components/schedule-editor";
 import { RetentionEditor } from "@/components/retention-editor";
@@ -24,20 +26,30 @@ import NotFound from "@/routes/not-found";
 import { Jobs, errorOf } from "@/lib/api";
 import { useFetch } from "@/lib/use-fetch";
 import { useLive } from "@/lib/live";
+import { PAGE_SIZE } from "@/lib/pagination";
 import { handleStartResponse } from "@/lib/start-run";
 
 export default function JobDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { runsVersion } = useLive();
+  const { activeRuns, runsVersion } = useLive();
   const [starting, setStarting] = React.useState(false);
   const [deleting, setDeleting] = React.useState(false);
+  const [page, setPage] = React.useState(1);
 
   const loader = React.useCallback(async () => {
-    const [jobR, runsR] = await Promise.all([Jobs.get(id), Jobs.runs(id)]);
+    const offset = (page - 1) * PAGE_SIZE;
+    const [jobR, runsR] = await Promise.all([
+      Jobs.get(id),
+      Jobs.runs(id, { limit: PAGE_SIZE, offset }),
+    ]);
     if (jobR.status === 404) return { missing: true };
-    return { job: jobR.body?.job, runs: runsR.body?.runs || [] };
-  }, [id]);
+    return {
+      job: jobR.body?.job,
+      runs: runsR.body?.runs || [],
+      total: runsR.body?.total || 0,
+    };
+  }, [id, page]);
   const { data, loading, reload } = useFetch(loader);
   // Declared before any early return: hooks must not sit behind a conditional.
   const loadSnapshots = React.useCallback(() => Jobs.snapshots(id), [id]);
@@ -49,6 +61,13 @@ export default function JobDetail() {
   React.useEffect(() => {
     if (data?.job) document.title = `${data.job.name} · restic backup manager`;
   }, [data]);
+
+  // Keep page in range when history shrinks (e.g. after deletes elsewhere).
+  React.useEffect(() => {
+    if (!data || data.missing) return;
+    const totalPages = Math.max(1, Math.ceil((data.total || 0) / PAGE_SIZE));
+    if (page > totalPages) setPage(totalPages);
+  }, [data, page]);
 
   if (data?.missing) return <NotFound />;
 
@@ -63,19 +82,23 @@ export default function JobDetail() {
 
   const job = data.job;
   const runs = data.runs;
-  const activeRun = runs.find((r) => r.status === "running" || r.status === "starting");
+  const total = data.total || 0;
+  const jobActiveRuns = activeRuns.filter((r) => r.jobId === id);
+  const activeRun = jobActiveRuns[0] || runs.find((r) => r.status === "running" || r.status === "starting");
 
   const runNow = async () => {
     setStarting(true);
     const res = await Jobs.run(id);
     setStarting(false);
-    handleStartResponse(res, navigate, "Could not start the backup.");
-    reload();
+    if (handleStartResponse(res, navigate, "Could not start the backup.", { stay: true })) {
+      reload();
+    }
   };
 
   const remove = async (forgetSnapshots) => {
     if (forgetSnapshots) {
       const res = await Jobs.forget(id, { deleteJob: true });
+      // Job is going away — navigate to the new run (or jobs list on failure).
       return handleStartResponse(res, navigate, "Could not delete the job and its snapshots.");
     }
     const res = await Jobs.remove(id);
@@ -137,24 +160,48 @@ export default function JobDetail() {
 
       <div className="space-y-4">
         <ScheduleEditor job={job} onSaved={() => reload()} />
-        <RetentionEditor job={job} onSaved={() => reload()} />
+        <RetentionEditor job={job} onSaved={() => reload()} stay />
 
-        <Card>
-          <CardHeader>
-            <CardTitle>
-              Run history{" "}
-              <span className="ml-1 tabular text-xs font-normal text-muted-foreground">
-                {runs.length}
-              </span>
-            </CardTitle>
-          </CardHeader>
-          <div className="border-t border-border">
-            <RunHistory
-              runs={runs}
-              emptyMessage="This job has never run. Start a backup and it will appear here."
-            />
-          </div>
-        </Card>
+        <div className="space-y-4">
+          <ActiveRunsCard
+            runs={jobActiveRuns}
+            title="Running for this job"
+            description="Live operations started from this job."
+            emptyDescription="Start a backup, restore, or retention run and it will appear here."
+          />
+
+          <Card>
+            <CardHeader>
+              <div className="min-w-0 flex-1">
+                <CardTitle>
+                  Activity{" "}
+                  <span className="ml-1 tabular text-xs font-normal text-muted-foreground">
+                    {total}
+                  </span>
+                </CardTitle>
+                <CardDescription className="mt-1">
+                  Finished and in-progress operations for this job. Open a row for the full log.
+                </CardDescription>
+              </div>
+            </CardHeader>
+            <div className="border-t border-border">
+              <RunHistory
+                runs={runs}
+                emptyMessage="This job has never run. Start a backup and it will appear here."
+              />
+            </div>
+            {total > PAGE_SIZE ? (
+              <div className="border-t border-border px-4">
+                <ListPagination
+                  page={page}
+                  pageSize={PAGE_SIZE}
+                  total={total}
+                  onPageChange={setPage}
+                />
+              </div>
+            ) : null}
+          </Card>
+        </div>
 
         <SnapshotsPanel
           title="Snapshots from this job"
@@ -169,6 +216,7 @@ export default function JobDetail() {
           reloadKey={runsVersion}
           defaultRestoreTarget={job.folderPath}
           jobId={id}
+          stay
         />
       </div>
 
