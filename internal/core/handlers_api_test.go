@@ -201,6 +201,43 @@ func TestJobScheduleInView(t *testing.T) {
 	}
 }
 
+func TestJobScheduleOverdueInView(t *testing.T) {
+	fake := &fakeRunner{installed: true}
+	app := newRunTestApp(t, fake)
+	h := routesFor(t, app)
+	_, jobID := makeJob(t, app, "sched-overdue", "/data")
+
+	run, err := app.Coord.StartBackup(jobID)
+	if err != nil {
+		t.Fatalf("StartBackup: %v", err)
+	}
+	final := waitForStatus(t, app.Runs, run.ID, StatusSuccess, 2*time.Second)
+	past := time.Now().UTC().Add(-8 * time.Hour)
+	app.Runs.mutate(final.ID, true, func(r *Run) {
+		r.StartedAt = past
+		r.FinishedAt = &past
+	})
+
+	job, _ := app.Jobs.Get(jobID)
+	job.Schedule = &JobSchedule{Enabled: true, Kind: ScheduleEvery, Every: "6h"}
+	if _, err := app.Jobs.Update(jobID, job); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	var one struct {
+		Job jobView `json:"job"`
+	}
+	if code := doJSON(t, h, "GET", "/api/jobs/"+jobID, nil, &one); code != http.StatusOK {
+		t.Fatalf("get job: %d", code)
+	}
+	if one.Job.ScheduleState != ScheduleStateOverdue {
+		t.Fatalf("scheduleState = %q, want overdue", one.Job.ScheduleState)
+	}
+	if one.Job.NextDueAt == nil || one.Job.NextDueAt.After(time.Now()) {
+		t.Fatalf("nextDueAt should be in the past when overdue, got %v", one.Job.NextDueAt)
+	}
+}
+
 // ---- run list filters ------------------------------------------------------
 
 func TestRunListFiltersAndLimit(t *testing.T) {

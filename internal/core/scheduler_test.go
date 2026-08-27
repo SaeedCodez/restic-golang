@@ -95,6 +95,14 @@ func TestJobDueDaily(t *testing.T) {
 		t.Fatalf("nextDueAt = %v, want %v", next, want)
 	}
 
+	// Known limitation: never-run daily with no sticky anchor. If the process is
+	// down across that first At and wakes afterward, nextDueAt recomputes from
+	// "now" and defers another day (catch-up needs a prior attempt — see below).
+	later := atLocal(t, "2006-01-02 15:04", "2026-08-27 02:01")
+	if jobDue(sched, nil, false, later) {
+		t.Fatal("never-run daily after missing first At currently waits for the following day")
+	}
+
 	// Catch-up: last attempt yesterday 01:00, now 10:00 → missed 02:00 → due.
 	last := atLocal(t, "2006-01-02 15:04", "2026-08-25 01:00")
 	now = atLocal(t, "2006-01-02 15:04", "2026-08-26 10:00")
@@ -312,4 +320,246 @@ func TestSchedulerDoesNotRetryStorm(t *testing.T) {
 		t.Fatalf("after retry wait want 2 runs, got %d", len(runs))
 	}
 	waitForStatus(t, app.Runs, runs[0].ID, StatusFailed, 2*time.Second)
+}
+
+func TestDeriveScheduleState(t *testing.T) {
+	now := atLocal(t, "2006-01-02 15:04", "2026-08-26 15:00")
+	hourly := &JobSchedule{Enabled: true, Kind: ScheduleHourly}
+	daily := &JobSchedule{Enabled: true, Kind: ScheduleDaily, At: "02:00"}
+	stale := now.Add(-2 * time.Hour)
+	fresh := now.Add(-30 * time.Minute)
+
+	cases := []struct {
+		name        string
+		sched       *JobSchedule
+		lastAttempt *time.Time
+		lastOK      bool
+		lastSuccess *time.Time
+		running     bool
+		want        string
+	}{
+		{"nil off", nil, nil, false, nil, false, ScheduleStateOff},
+		{"disabled off", &JobSchedule{Enabled: false, Kind: ScheduleHourly}, nil, false, nil, false, ScheduleStateOff},
+		{"daily waiting for At → scheduled", daily, nil, false, nil, false, ScheduleStateScheduled},
+		{"hourly never-run due → overdue", hourly, nil, false, nil, false, ScheduleStateOverdue},
+		{"success within period → scheduled", hourly, &fresh, true, &fresh, false, ScheduleStateScheduled},
+		{"success older than period → overdue", hourly, &stale, true, &stale, false, ScheduleStateOverdue},
+		{"running wins over overdue", hourly, &stale, true, &stale, true, ScheduleStateRunning},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := deriveScheduleState(tc.sched, tc.lastAttempt, tc.lastOK, tc.lastSuccess, tc.running, now)
+			if got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSchedulerCatchUpFiresOnce(t *testing.T) {
+	fake := &fakeRunner{installed: true}
+	app := newRunTestApp(t, fake)
+	_, jobID := makeJob(t, app, "catchup", "/data/catchup")
+
+	// Seed a successful backup, then backdate it far into the past (laptop sleep).
+	run, err := app.Coord.StartBackup(jobID)
+	if err != nil {
+		t.Fatalf("StartBackup: %v", err)
+	}
+	final := waitForStatus(t, app.Runs, run.ID, StatusSuccess, 2*time.Second)
+	past := final.FinishedAt.Add(-20 * time.Hour)
+	app.Runs.mutate(final.ID, true, func(r *Run) {
+		r.StartedAt = past
+		r.FinishedAt = &past
+	})
+
+	job, _ := app.Jobs.Get(jobID)
+	job.Schedule = &JobSchedule{Enabled: true, Kind: ScheduleEvery, Every: "6h"}
+	if _, err := app.Jobs.Update(jobID, job); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	fake.streamFn = gatedStream(started, release)
+
+	sched := newScheduler(app)
+	now := time.Now()
+	sched.now = func() time.Time { return now }
+	sched.tickOnce()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("catch-up tick did not start a backup")
+	}
+	// Jumping many missed periods must still produce only one in-flight scheduled run.
+	sched.tickOnce()
+	if got := len(app.Runs.runsForJob(jobID)); got != 2 {
+		t.Fatalf("catch-up should add exactly one run while active, got %d", got)
+	}
+	close(release)
+	waitForStatus(t, app.Runs, app.Runs.runsForJob(jobID)[0].ID, StatusSuccess, 2*time.Second)
+
+	runs := app.Runs.runsForJob(jobID)
+	if len(runs) != 2 {
+		t.Fatalf("after catch-up want 2 runs total, got %d", len(runs))
+	}
+	if runs[0].Params["trigger"] != TriggerSchedule {
+		t.Fatalf("newest trigger = %q, want schedule", runs[0].Params["trigger"])
+	}
+}
+
+func TestSchedulerSkipsWhenJobAlreadyRunning(t *testing.T) {
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	fake := &fakeRunner{installed: true, streamFn: gatedStream(started, release)}
+	app := newRunTestApp(t, fake)
+	_, jobID := makeJob(t, app, "self-busy", "/data/self")
+
+	run, err := app.Coord.StartBackup(jobID)
+	if err != nil {
+		t.Fatalf("StartBackup: %v", err)
+	}
+	<-started
+
+	job, _ := app.Jobs.Get(jobID)
+	job.Schedule = &JobSchedule{Enabled: true, Kind: ScheduleHourly}
+	if _, err := app.Jobs.Update(jobID, job); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	sched := newScheduler(app)
+	sched.tickOnce()
+	if got := len(app.Runs.runsForJob(jobID)); got != 1 {
+		t.Fatalf("active job backup should block schedule, got %d runs", got)
+	}
+
+	close(release)
+	waitForStatus(t, app.Runs, run.ID, StatusSuccess, 2*time.Second)
+}
+
+func TestSchedulerDailyWaitsThenFires(t *testing.T) {
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	fake := &fakeRunner{installed: true, streamFn: gatedStream(started, release)}
+	app := newRunTestApp(t, fake)
+	_, jobID := makeJob(t, app, "daily-fire", "/data/daily")
+
+	job, _ := app.Jobs.Get(jobID)
+	job.Schedule = &JobSchedule{Enabled: true, Kind: ScheduleDaily, At: "02:00"}
+	if _, err := app.Jobs.Update(jobID, job); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	afternoon := atLocal(t, "2006-01-02 15:04", "2026-08-26 15:00")
+	sched := newScheduler(app)
+	sched.now = func() time.Time { return afternoon }
+	sched.tickOnce()
+	if got := len(app.Runs.runsForJob(jobID)); got != 0 {
+		t.Fatalf("daily before At must not fire, got %d runs", got)
+	}
+
+	// Never-run daily becomes due at the next At (inclusive). Jumping past that
+	// instant without a tick would defer to the following day; hit 02:00 exactly.
+	atSlot := atLocal(t, "2006-01-02 15:04", "2026-08-27 02:00")
+	sched.now = func() time.Time { return atSlot }
+	sched.tickOnce()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("daily schedule did not fire at At")
+	}
+	close(release)
+
+	runs := app.Runs.runsForJob(jobID)
+	if len(runs) != 1 {
+		t.Fatalf("want 1 scheduled run, got %d", len(runs))
+	}
+	if runs[0].Params["trigger"] != TriggerSchedule {
+		t.Fatalf("trigger = %q, want schedule", runs[0].Params["trigger"])
+	}
+	waitForStatus(t, app.Runs, runs[0].ID, StatusSuccess, 2*time.Second)
+}
+
+func TestSchedulerDailyCatchUpAfterPriorAttempt(t *testing.T) {
+	// If the app was down across the daily At, a prior attempt before that slot
+	// makes the missed calendar fire due (catch-up).
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	fake := &fakeRunner{installed: true, streamFn: gatedStream(started, release)}
+	app := newRunTestApp(t, fake)
+	_, jobID := makeJob(t, app, "daily-catchup", "/data/daily-cu")
+
+	seed, err := app.Coord.StartBackup(jobID)
+	if err != nil {
+		t.Fatalf("StartBackup: %v", err)
+	}
+	<-started
+	close(release)
+	final := waitForStatus(t, app.Runs, seed.ID, StatusSuccess, 2*time.Second)
+
+	// Last attempt yesterday 01:00; now today 10:00 → missed 02:00 → due.
+	past := atLocal(t, "2006-01-02 15:04", "2026-08-25 01:00")
+	app.Runs.mutate(final.ID, true, func(r *Run) {
+		r.StartedAt = past
+		r.FinishedAt = &past
+	})
+
+	job, _ := app.Jobs.Get(jobID)
+	job.Schedule = &JobSchedule{Enabled: true, Kind: ScheduleDaily, At: "02:00"}
+	if _, err := app.Jobs.Update(jobID, job); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	started2 := make(chan struct{}, 1)
+	release2 := make(chan struct{})
+	fake.streamFn = gatedStream(started2, release2)
+
+	now := atLocal(t, "2006-01-02 15:04", "2026-08-26 10:00")
+	sched := newScheduler(app)
+	sched.now = func() time.Time { return now }
+	sched.tickOnce()
+	select {
+	case <-started2:
+	case <-time.After(2 * time.Second):
+		t.Fatal("missed daily slot should catch up")
+	}
+	close(release2)
+	runs := app.Runs.runsForJob(jobID)
+	if len(runs) != 2 || runs[0].Params["trigger"] != TriggerSchedule {
+		t.Fatalf("catch-up run missing: %+v", runs)
+	}
+	waitForStatus(t, app.Runs, runs[0].ID, StatusSuccess, 2*time.Second)
+}
+
+func TestSchedulerDoesNotRefireImmediatelyAfterSuccess(t *testing.T) {
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	fake := &fakeRunner{installed: true, streamFn: gatedStream(started, release)}
+	app := newRunTestApp(t, fake)
+	_, jobID := makeJob(t, app, "norefire", "/data/norefire")
+
+	job, _ := app.Jobs.Get(jobID)
+	job.Schedule = &JobSchedule{Enabled: true, Kind: ScheduleHourly}
+	if _, err := app.Jobs.Update(jobID, job); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	base := time.Now()
+	sched := newScheduler(app)
+	sched.now = func() time.Time { return base }
+	sched.tickOnce()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected first scheduled fire")
+	}
+	close(release)
+	waitForStatus(t, app.Runs, app.Runs.runsForJob(jobID)[0].ID, StatusSuccess, 2*time.Second)
+
+	sched.now = func() time.Time { return base.Add(time.Minute) }
+	sched.tickOnce()
+	if got := len(app.Runs.runsForJob(jobID)); got != 1 {
+		t.Fatalf("should not refire within period, got %d runs", got)
+	}
 }

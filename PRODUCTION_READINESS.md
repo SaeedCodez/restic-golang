@@ -129,7 +129,7 @@ _(none remaining after this pass for the single-user Local path)_
 
 - **Real AWS/GCS/R2 endpoints** — MinIO path-style local S3 was verified; vendor-specific auth/IAM quirks were not.
 - **Long-running backups / large repos** — fixtures were small (tens of MB); progress UI and lock behaviour under multi-hour load not soaked.
-- **Scheduler firing on the clock** — schedule was enabled and shown as upcoming; did not wait a full hour for an automatic trigger. (Deferred follow-up.)
+- **Scheduler wall-clock soak** — not waited out in Docker. Covered instead by fake-clock unit/integration tests (`Scheduler.now` + `tickOnce`): due/overdue math, catch-up after sleep, busy/self-busy skip, daily At fire, retry storm, API `scheduleState=overdue`. Known limitation: a **never-run** daily/weekly job that is offline across its first `At` defers to the following day until there is a prior attempt (documented in `TestJobDueDaily`).
 - **Retention forget+prune against a rich snapshot history** — retention UI/CLI flags exist; not fully exercised on a multi-snapshot timeline in this pass.
 - **Coolify / Traefik production proxy path** — Compose local only; Coolify FQDN env not tested.
 - **Multi-arch Docker image on amd64** — verified on arm64 Mac.
