@@ -1,0 +1,52 @@
+# One-command stack: restic-web + Postgres.
+#
+# Local:
+#   docker compose up --build
+#   open http://127.0.0.1:8080
+#
+# Coolify (Docker Compose build pack): assigns SERVICE_PASSWORD_DB and
+# SERVICE_FQDN_APP_8080 automatically. Local defaults use password "restic".
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: restic
+      POSTGRES_PASSWORD: ${SERVICE_PASSWORD_DB:-restic}
+      POSTGRES_DB: restic
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U restic -d restic"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: postgres://restic:${SERVICE_PASSWORD_DB:-restic}@db:5432/restic?sslmode=disable
+      PORT: "8080"
+      ADDR: 0.0.0.0:8080
+      RESTIC_WEB_DATA: /app/data
+      # Coolify: generate FQDN and proxy to port 8080 (set domain in Coolify UI).
+      SERVICE_FQDN_APP_8080:
+    volumes:
+      - appdata:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/api/auth/status || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  appdata:
