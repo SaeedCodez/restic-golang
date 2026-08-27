@@ -12,7 +12,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	installed := s.app.Runner.Available()
 	resp := map[string]any{
 		"ok":              true,
-		"ResticInstalled": installed,
+		"resticInstalled": installed,
 		"counts": map[string]int{
 			"repositories": s.app.Repos.Count(),
 			"folders":      s.app.Folders.Count(),
