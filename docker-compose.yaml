@@ -38,12 +38,13 @@ services:
       SERVICE_FQDN_APP_8080:
     volumes:
       - appdata:/app/data
-      # Coolify: read-only view of all Docker named volumes on this host.
-      # Lets restic back up any site volume (e.g. WordPress) without per-site
-      # compose changes. Folder paths look like:
+      # Coolify: all Docker named volumes on this host.
+      # Read-write so backups can restore in place into site volumes (e.g. WordPress).
+      # Folder paths look like:
       #   /docker-volumes/<volume-name>/_data
       #   /docker-volumes/<volume-name>/_data/wp-content
-      - /var/lib/docker/volumes:/docker-volumes:ro
+      # Caution: the app container can modify any named volume on the host.
+      - /var/lib/docker/volumes:/docker-volumes:rw
     depends_on:
       db:
         condition: service_healthy

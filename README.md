@@ -318,7 +318,7 @@ stored choice is applied before first paint, so the page never flashes.
 | Initialize      | `restic -r <repo> init` (also run automatically by a backup against an uninitialized repository) |
 | Backup          | `restic -r <repo> backup <src> --tag resticweb-job:<id> --json` |
 | List snapshots  | `restic -r <repo> snapshots [--tag …] --json`           |
-| Restore         | `restic -r <repo> restore <id> --target <dir> --json`   |
+| Restore         | `restic restore <id> --target … --json` (in-place uses `/`) |
 | Download (zip)  | restore into a temp workspace, then stream a zip        |
 | Unlock          | `restic -r <repo> unlock` (removes only stale locks)    |
 | Retention       | `restic -r <repo> forget --tag … --keep-* --prune --json` |

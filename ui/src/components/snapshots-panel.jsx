@@ -61,8 +61,8 @@ function RestoreDialog({ open, onOpenChange, snapshot, repositoryId, defaultTarg
             <DialogTitle>Restore snapshot {shortId(snapshot?.id)}</DialogTitle>
             <DialogDescription>
               {hasDefault
-                ? "Files go back into this job's folder by default. Existing files with the same names are overwritten."
-                : "restic writes the snapshot's files into this folder. Choose somewhere empty — existing files with the same names are overwritten."}
+                ? "Files are restored in place into this job's folder by default (original paths). Existing files with the same names are overwritten."
+                : "Files are written under this folder using the snapshot's full paths. Prefer an empty directory — existing files with the same names are overwritten."}
             </DialogDescription>
           </DialogHeader>
 
@@ -84,7 +84,9 @@ function RestoreDialog({ open, onOpenChange, snapshot, repositoryId, defaultTarg
                 <div>
                   <p className="text-sm font-medium">Restore to a different path</p>
                   <p className="text-[13px] text-muted-foreground">
-                    {custom ? "Enter an absolute path below" : "Keep the job folder above"}
+                    {custom
+                      ? "Snapshot paths are recreated under the path you enter"
+                      : "Keep the job folder above (in-place)"}
                   </p>
                 </div>
                 <input

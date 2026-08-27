@@ -170,6 +170,8 @@ restic-webctl repo init <id|name> [--wait]
 restic-webctl repo unlock <id|name>
 restic-webctl repo snapshots <id|name>
 restic-webctl repo restore <id|name> --snapshot ID --target PATH [--wait]
+# When PATH equals a path stored in the snapshot (usual job-folder restore),
+# the app uses restic --target / so files land in place, not nested under PATH.
 restic-webctl repo download <id|name> --snapshot ID [--wait]
 ```
 

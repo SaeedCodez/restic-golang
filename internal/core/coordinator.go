@@ -167,6 +167,10 @@ func (c *Coordinator) StartInit(repoID string) (*Run, error) {
 }
 
 // StartRestore restores a snapshot into a target folder as a tracked run.
+//
+// When target equals a path stored in the snapshot (typical "restore into this
+// job's folder"), restic is invoked with --target / so absolute snapshot paths
+// are written back in place instead of nested under target.
 func (c *Coordinator) StartRestore(repoID, snapshotID, target string) (*Run, error) {
 	repo, ok := c.app.Repos.Get(repoID)
 	if !ok {
@@ -180,16 +184,38 @@ func (c *Coordinator) StartRestore(repoID, snapshotID, target string) (*Run, err
 	if target == "" {
 		return nil, validf("please provide a target folder for the restore")
 	}
-	if err := os.MkdirAll(target, 0o755); err != nil {
-		return nil, validf("could not create target folder: %v", err)
+
+	lookupCtx, lookupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	paths := lookupSnapshotPaths(lookupCtx, c.app.Runner, &repo, snapshotID)
+	lookupCancel()
+	resticTarget := resolveResticRestoreTarget(target, paths)
+
+	// Ensure the user-facing destination exists. In-place restores use --target /;
+	// MkdirAll on the original folder is best-effort (restic creates missing dirs).
+	if target != "/" {
+		if err := os.MkdirAll(target, 0o755); err != nil {
+			if resticTarget != "/" {
+				return nil, validf("could not create target folder: %v", err)
+			}
+			log.Printf("restore: could not ensure in-place target %s: %v", target, err)
+		}
+	}
+
+	params := map[string]string{"snapshotId": snapshotID, "target": target}
+	if resticTarget != target {
+		params["resticTarget"] = resticTarget
 	}
 	run := &Run{
 		Kind: KindRestore, Status: StatusStarting, RepositoryID: repo.ID, RepoName: repo.Name,
-		Params: map[string]string{"snapshotId": snapshotID, "target": target},
+		Params: params,
 	}
 	return c.startRun(repo, run, func(ctx context.Context, h *runHandle) (int, error) {
-		h.Log("info", "system", "Restoring "+shortID(snapshotID)+" to "+target)
-		return c.app.Runner.Restore(ctx, &repo, snapshotID, target, h)
+		if resticTarget == "/" && target != "/" {
+			h.Log("info", "system", "Restoring "+shortID(snapshotID)+" in place to "+target)
+		} else {
+			h.Log("info", "system", "Restoring "+shortID(snapshotID)+" to "+target)
+		}
+		return c.app.Runner.Restore(ctx, &repo, snapshotID, resticTarget, h)
 	})
 }
 
