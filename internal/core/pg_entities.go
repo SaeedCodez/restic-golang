@@ -94,7 +94,9 @@ func (s *RepoStore) Create(item Repository) (Repository, error) {
 	if err != nil {
 		return zero, err
 	}
-	now := time.Now().UTC()
+	// Microsecond truncation matches Postgres timestamptz so Create/Update
+	// timestamps compare equal without a round-trip re-read.
+	now := time.Now().UTC().Truncate(time.Microsecond)
 	item.ID = newID()
 	item.Name = name
 	item.CreatedAt = now
@@ -129,7 +131,7 @@ func (s *RepoStore) Update(id string, item Repository) (Repository, error) {
 	item.ID = id
 	item.Name = name
 	item.CreatedAt = prev.CreatedAt
-	item.UpdatedAt = time.Now().UTC()
+	item.UpdatedAt = time.Now().UTC().Truncate(time.Microsecond)
 	ctx, cancel := dbCtx()
 	defer cancel()
 	tag, err := s.Pool.Exec(ctx, `UPDATE repositories SET
@@ -228,7 +230,7 @@ func (s *FolderStore) Create(item Folder) (Folder, error) {
 	if err != nil {
 		return zero, err
 	}
-	now := time.Now().UTC()
+	now := time.Now().UTC().Truncate(time.Microsecond)
 	item.ID = newID()
 	item.Name = name
 	item.CreatedAt = now
@@ -259,7 +261,7 @@ func (s *FolderStore) Update(id string, item Folder) (Folder, error) {
 	item.ID = id
 	item.Name = name
 	item.CreatedAt = prev.CreatedAt
-	item.UpdatedAt = time.Now().UTC()
+	item.UpdatedAt = time.Now().UTC().Truncate(time.Microsecond)
 	ctx, cancel := dbCtx()
 	defer cancel()
 	tag, err := s.Pool.Exec(ctx, `UPDATE folders SET name=$2, updated_at=$3, path=$4 WHERE id=$1`,
@@ -369,7 +371,7 @@ func (s *JobStore) Create(item Job) (Job, error) {
 	if err != nil {
 		return zero, err
 	}
-	now := time.Now().UTC()
+	now := time.Now().UTC().Truncate(time.Microsecond)
 	item.ID = newID()
 	item.Name = name
 	item.CreatedAt = now
@@ -407,7 +409,7 @@ func (s *JobStore) Update(id string, item Job) (Job, error) {
 	item.ID = id
 	item.Name = name
 	item.CreatedAt = prev.CreatedAt
-	item.UpdatedAt = time.Now().UTC()
+	item.UpdatedAt = time.Now().UTC().Truncate(time.Microsecond)
 	if item.Retention != nil {
 		_ = item.Retention.Validate()
 	}

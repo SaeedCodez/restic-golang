@@ -212,6 +212,11 @@ func forgetArgs(tag string, policy JobRetention) ([]string, error) {
 // streamRestic runs a restic command that emits --json progress, forwarding
 // normalized events to sink. It returns restic's exit code; err is set only if
 // the process could not be started.
+//
+// Older restic builds (e.g. Debian bookworm's 0.14) return exit 1 with a
+// human-readable stderr message instead of the modern 10/11/12 codes. We
+// accumulate streamed text and remap those failures so auto-init and
+// classifyRun keep working.
 func streamRestic(ctx context.Context, repo *Repository, kind RunKind, sink RunSink, args ...string) (int, error) {
 	cmd, err := resticCommand(ctx, repo, args...)
 	if err != nil {
@@ -232,7 +237,19 @@ func streamRestic(ctx context.Context, repo *Repository, kind RunKind, sink RunS
 		sink.PID(cmd.Process.Pid, procStartToken(cmd.Process.Pid))
 	}
 
-	var wg sync.WaitGroup
+	var (
+		wg      sync.WaitGroup
+		diagMu  sync.Mutex
+		diagBuf strings.Builder
+	)
+	capture := func(line string) {
+		diagMu.Lock()
+		if diagBuf.Len() < 8*1024 {
+			diagBuf.WriteString(line)
+			diagBuf.WriteByte('\n')
+		}
+		diagMu.Unlock()
+	}
 
 	// stderr: restic prints human-readable warnings and fatal errors here.
 	wg.Add(1)
@@ -245,6 +262,7 @@ func streamRestic(ctx context.Context, repo *Repository, kind RunKind, sink RunS
 			if line == "" {
 				continue
 			}
+			capture(line)
 			// restic may emit structured JSON (e.g. an exit_error) on stderr; route
 			// it through the mapper so it reads cleanly instead of as raw JSON.
 			if strings.HasPrefix(line, "{") {
@@ -272,9 +290,13 @@ func streamRestic(ctx context.Context, repo *Repository, kind RunKind, sink RunS
 			var m resticMessage
 			if err := json.Unmarshal(line, &m); err != nil {
 				if t := strings.TrimSpace(string(line)); t != "" {
+					capture(t)
 					sink.Log("info", "stdout", t)
 				}
 				continue
+			}
+			if m.MessageType == "exit_error" || m.MessageType == "error" {
+				capture(string(line))
 			}
 			mapResticMessage(kind, &m, sink)
 		}
@@ -282,7 +304,17 @@ func streamRestic(ctx context.Context, repo *Repository, kind RunKind, sink RunS
 	}()
 
 	wg.Wait()
-	return exitCode(cmd.Wait()), nil
+	code := exitCode(cmd.Wait())
+	if code != 0 && code != resticExitWarnings && code != resticExitNotInitialized &&
+		code != resticExitLocked && code != resticExitBadPassword && code != resticExitInterrupted {
+		diagMu.Lock()
+		text := diagBuf.String()
+		diagMu.Unlock()
+		if mapped := classifyResticFailure(text); mapped != 0 {
+			code = mapped
+		}
+	}
+	return code, nil
 }
 
 // mapResticMessage converts one parsed restic --json message into sink events.

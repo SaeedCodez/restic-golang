@@ -18,7 +18,7 @@ import (
 const resticBinary = "restic"
 
 // restic exit codes we classify (restic >= ~0.17.1). Older restic returns 1 with
-// a stderr message, handled by the fallback path.
+// a stderr message; streamRestic remaps those via classifyResticFailure.
 const (
 	resticExitWarnings       = 3   // backup completed but some files were unreadable
 	resticExitNotInitialized = 10  // repository does not exist
@@ -106,19 +106,41 @@ func decodeSnapshots(out []byte) ([]Snapshot, error) {
 
 // classifyRepoError turns restic's stderr into a friendly error for repo reads.
 func classifyRepoError(text string) error {
-	low := strings.ToLower(text)
-	switch {
-	case strings.Contains(low, "wrong password") || strings.Contains(low, "no key found"):
+	switch classifyResticFailure(text) {
+	case resticExitBadPassword:
 		return errWrongPassword
-	case strings.Contains(low, "unable to open config") ||
-		strings.Contains(low, "is there a repository") ||
-		strings.Contains(low, "does not exist") ||
-		strings.Contains(low, "no such file") ||
-		strings.Contains(low, "the specified bucket does not exist") ||
-		strings.Contains(low, "unable to open repository"):
+	case resticExitNotInitialized:
 		return errNotInitialized
 	default:
 		return fmt.Errorf("%s", firstLine(strings.TrimSpace(text)))
+	}
+}
+
+// classifyResticFailure maps restic stderr/stdout text to a known exit code for
+// older restic builds that return generic exit 1 instead of 10/11/12.
+// Returns 0 when the text does not match a known failure class.
+func classifyResticFailure(text string) int {
+	low := strings.ToLower(text)
+	switch {
+	case strings.Contains(low, "wrong password") || strings.Contains(low, "no key found"):
+		return resticExitBadPassword
+	case strings.Contains(low, "unable to open config") ||
+		strings.Contains(low, "is there a repository") ||
+		strings.Contains(low, "repository does not exist") ||
+		strings.Contains(low, "the specified bucket does not exist") ||
+		strings.Contains(low, "unable to open repository"):
+		return resticExitNotInitialized
+	case strings.Contains(low, "unable to create lock") ||
+		strings.Contains(low, "repository is already locked") ||
+		strings.Contains(low, "lock file is stale"):
+		return resticExitLocked
+	default:
+		// "no such file" alone is too broad for remapping (could be a bad source path).
+		if strings.Contains(low, "no such file") &&
+			(strings.Contains(low, "config") || strings.Contains(low, "repository")) {
+			return resticExitNotInitialized
+		}
+		return 0
 	}
 }
 

@@ -111,7 +111,8 @@ restic-webctl repo create --name local --backend Local \
   --path /data/restic-repo --password 'repo-secret'
 restic-webctl job create --name nightly --folder home --repo local
 
-# start a backup and wait for completion
+# start a backup and wait for completion (--wait is implied; CLI always waits
+# because runs execute in this process — exiting early would orphan the run)
 restic-webctl job run nightly --wait --json
 ```
 

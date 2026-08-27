@@ -29,9 +29,9 @@ WORKDIR /app
 COPY --from=builder /out/restic-web /app/restic-web
 COPY --from=builder /out/restic-webctl /app/restic-webctl
 
-RUN mkdir -p /app/data \
+RUN mkdir -p /app/data /app/data/cache \
   && groupadd --system --gid 1001 app \
-  && useradd --system --uid 1001 --gid app app \
+  && useradd --system --uid 1001 --gid app --home-dir /app --shell /usr/sbin/nologin app \
   && chown -R app:app /app \
   && ln -sf /app/restic-webctl /usr/local/bin/restic-webctl
 
@@ -39,8 +39,11 @@ USER app
 
 ENV PORT=8080
 ENV ADDR=0.0.0.0:8080
+ENV HOME=/app
 ENV PATH="/app:/usr/local/bin:${PATH}"
 ENV RESTIC_WEB_DATA=/app/data
+# restic defaults to $HOME/.cache; pin under the data volume so it survives and is writable.
+ENV RESTIC_CACHE_DIR=/app/data/cache
 
 EXPOSE 8080
 

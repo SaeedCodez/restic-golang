@@ -85,13 +85,13 @@ func (c *CLI) startAndMaybeWait(run *core.Run, err error, wait, follow bool) int
 	}
 	runID := run.ID
 
+	// Runs execute inside this CLI process. Exiting before the run finishes
+	// kills the restic child and leaves a durable "running"/"starting" ghost
+	// that blocks the repository until the web server restarts and reconciles.
+	// There is no detach mode yet, so always wait for completion.
 	if !wait && !follow {
-		if c.cfg.json {
-			return c.writeJSON(map[string]any{"ok": true, "runId": runID, "run": run})
-		}
-		c.note("Started run %s", runID)
-		fmt.Println(runID)
-		return exitOK
+		wait = true
+		c.note("waiting for %s (CLI always waits; exiting early would orphan the run)…", runID)
 	}
 
 	if c.cfg.json && !follow {
@@ -103,15 +103,17 @@ func (c *CLI) startAndMaybeWait(run *core.Run, err error, wait, follow bool) int
 		return c.fail(err)
 	}
 	st := final.Status
+	code := runStatusExit(st)
 	if c.cfg.json {
 		ok := st == core.StatusSuccess || st == core.StatusSuccessWarnings
-		return c.writeJSON(map[string]any{"ok": ok, "runId": runID, "run": final})
+		_ = c.writeJSON(map[string]any{"ok": ok, "runId": runID, "run": final})
+		return code
 	}
 	fmt.Printf("run %s finished: %s\n", runID, st)
 	if final.Error != "" {
 		fmt.Fprintf(os.Stderr, "error: %s\n", final.Error)
 	}
-	return runStatusExit(st)
+	return code
 }
 
 func runStatusExit(st core.RunStatus) int {
