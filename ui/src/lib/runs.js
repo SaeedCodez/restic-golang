@@ -47,6 +47,7 @@ export const KIND_LABEL = {
   unlock: "Unlock",
   retention: "Retention",
   forget: "Forget",
+  check: "Check",
 };
 
 export function statusLabel(status) {

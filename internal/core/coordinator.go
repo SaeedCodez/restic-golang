@@ -515,6 +515,61 @@ func (c *Coordinator) StartResetRepo(repoID string) (*Run, error) {
 	})
 }
 
+// StartCheck verifies a repository's integrity (`restic check`) as a tracked
+// run. readData is "" for a structure-only check, "all" to read every data pack,
+// or a --read-data-subset value such as "10%".
+func (c *Coordinator) StartCheck(repoID, readData string) (*Run, error) {
+	repo, ok := c.app.Repos.Get(repoID)
+	if !ok {
+		return nil, notFoundf("repository not found")
+	}
+	readData = strings.TrimSpace(readData)
+	if _, err := checkArgs(readData); err != nil {
+		return nil, validf("%s", err.Error())
+	}
+	params := map[string]string{}
+	if readData != "" {
+		params["readData"] = readData
+	}
+	run := &Run{
+		Kind: KindCheck, Status: StatusStarting, RepositoryID: repo.ID, RepoName: repo.Name,
+		Params: params,
+	}
+	return c.startRun(repo, run, func(ctx context.Context, h *runHandle) (int, error) {
+		switch readData {
+		case "":
+			h.Log("info", "system", "Checking repository "+repo.Name+" (structure and metadata)")
+		case "all":
+			h.Log("info", "system", "Checking repository "+repo.Name+" and reading all backed-up data")
+		default:
+			h.Log("info", "system", "Checking repository "+repo.Name+" and reading a "+readData+" subset of backed-up data")
+		}
+		sink := &checkSink{RunSink: h}
+		code, err := c.runner.Check(ctx, &repo, readData, sink)
+		if err == nil && code == 1 && sink.foundErrors.Load() && ctx.Err() == nil {
+			return code, errors.New("the repository check found errors; see the log for details")
+		}
+		if err == nil && code == 0 {
+			h.Log("ok", "system", "No errors were found.")
+		}
+		return code, err
+	})
+}
+
+// checkSink notes restic's "repository contains errors" verdict so a damaged
+// repository is reported as such rather than as a bare exit code 1.
+type checkSink struct {
+	RunSink
+	foundErrors atomic.Bool
+}
+
+func (s *checkSink) Log(level, stream, message string) {
+	if strings.Contains(strings.ToLower(message), "repository contains errors") {
+		s.foundErrors.Store(true)
+	}
+	s.RunSink.Log(level, stream, message)
+}
+
 // ErrRunNotActive means a stop was requested for a run that is not currently
 // running (already finished, unknown, or not stoppable from this process).
 var ErrRunNotActive = errors.New("run is not currently running")

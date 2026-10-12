@@ -271,6 +271,7 @@ that API (see [docs/cli.md](docs/cli.md)); you can also call it directly:
 | `POST /api/jobs/{id}/forget` | `202` forget+prune of this job's tagged snapshots; `{ deleteJob: true }` removes the job after success |
 | `POST /api/repositories/{id}/forget` | `202` forget+prune of one snapshot (`{ snapshotId }`) |
 | `POST /api/repositories/{id}/reset` | `202` forget+prune of every snapshot; the repository entity stays |
+| `POST /api/repositories/{id}/check` | `202` integrity check run (`restic check`); optional `{ readData: "all" \| "10%" \| "n/t" \| size }` |
 | `GET /api/runs` | filter with `status` (`active`/`finished`/an exact status), `kind`, `jobId`, `limit`; `total` reports the match count before the limit |
 | `GET /api/runs/{id}/log` | the durable log, `?after=<seq>` for incremental reads |
 | `GET /api/runs/{id}/events` | SSE: run state, progress and log, resumable via `Last-Event-ID` |
@@ -329,6 +330,7 @@ stored choice is applied before first paint, so the page never flashes.
 | Unlock          | `restic -r <repo> unlock` (removes only stale locks)    |
 | Retention       | `restic -r <repo> forget --tag … --keep-* --prune --json` |
 | Forget snapshot | `restic -r <repo> forget <id> --prune --json`           |
+| Check           | `restic -r <repo> check [--read-data \| --read-data-subset S]` |
 | Forget job data | list by tag, then `forget <ids…> --prune --json`        |
 | Empty repository| list all snapshots, then `forget <ids…> --prune --json` |
 
