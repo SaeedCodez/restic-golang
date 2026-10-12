@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -17,6 +18,9 @@ type App struct {
 	DataDir          string
 	Pool             *pgxpool.Pool
 	RetainRunsPerJob int
+	// ResticTimeout bounds the API's synchronous restic calls (test, unlock,
+	// list snapshots); 0 means no limit. Runs are never bounded by it.
+	ResticTimeout time.Duration
 
 	Repos   *RepoStore
 	Folders *FolderStore
@@ -53,17 +57,18 @@ func NewAppWithRunner(dataDir string, pool *pgxpool.Pool, runner Runner) (*App, 
 	}
 
 	app := &App{
-		DataDir:  dataDir,
-		Pool:     pool,
-		Repos:    newRepoStore(pool),
-		Folders:  newFolderStore(pool),
-		Jobs:     newJobStore(pool),
-		Auth:     auth,
-		Sessions: newSessionManager(),
-		Runs:     newRunStore(pool, bus),
-		Runner:   runner,
-		Bus:      bus,
-		Bcast:    bcast,
+		DataDir:       dataDir,
+		Pool:          pool,
+		ResticTimeout: DefaultResticTimeout,
+		Repos:         newRepoStore(pool),
+		Folders:       newFolderStore(pool),
+		Jobs:          newJobStore(pool),
+		Auth:          auth,
+		Sessions:      newSessionManager(),
+		Runs:          newRunStore(pool, bus),
+		Runner:        runner,
+		Bus:           bus,
+		Bcast:         bcast,
 	}
 	app.Coord = newCoordinator(app, app.Runs, runner, bus)
 	app.Sched = newScheduler(app)

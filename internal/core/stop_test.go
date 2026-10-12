@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -100,5 +101,46 @@ func TestStopHTTPEndpoint(t *testing.T) {
 	// Stopping an unknown run yields 404.
 	if code := doJSON(t, h, "POST", "/api/runs/nope/stop", nil, nil); code != http.StatusNotFound {
 		t.Fatalf("stop unknown run: code=%d, want 404", code)
+	}
+}
+
+// A line appended by another process (Stop from restic-webctl while the server
+// owns the run) must not cost the owner its later lines: before, the owner's
+// seq counter collided with it and every following line was dropped, including
+// restic's last output and "Stopped.".
+func TestLogContinuesAfterLineFromAnotherProcess(t *testing.T) {
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	gated := gatedStream(started, release)
+	fake := &fakeRunner{installed: true, streamFn: func(ctx context.Context, kind RunKind, sink RunSink) (int, error) {
+		code, err := gated(ctx, kind, sink)
+		sink.Log("warn", "stderr", "restic: last words")
+		return code, err
+	}}
+	app := newRunTestApp(t, fake)
+	_, jobID := makeJob(t, app, "a", "/data")
+
+	run, err := app.Coord.StartBackup(jobID)
+	if err != nil {
+		t.Fatalf("StartBackup: %v", err)
+	}
+	<-started
+	app.Runs.AppendSystemLine(run.ID, "warn", "Stop requested by another process.")
+	close(release)
+	waitForStatus(t, app.Runs, run.ID, StatusSuccess, 2*time.Second)
+
+	lines, _ := app.Runs.ReadLog(run.ID, 0)
+	var got []string
+	for i, ln := range lines {
+		if i > 0 && ln.Seq <= lines[i-1].Seq {
+			t.Fatalf("log seq not increasing: %+v", lines)
+		}
+		got = append(got, ln.Message)
+	}
+	joined := strings.Join(got, " | ")
+	for _, want := range []string{"Stop requested by another process.", "restic: last words", "Completed successfully."} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("log is missing %q: %s", want, joined)
+		}
 	}
 }

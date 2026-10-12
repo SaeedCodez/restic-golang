@@ -2,8 +2,11 @@ package core
 
 import (
 	"bufio"
+	"fmt"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // DefaultListenAddr prefers ADDR, then PORT (as 0.0.0.0:PORT for containers),
@@ -60,4 +63,25 @@ func LoadDotEnv(path string) error {
 		_ = os.Setenv(key, val)
 	}
 	return sc.Err()
+}
+
+// DefaultResticTimeout bounds the web API's synchronous restic calls (test
+// connection, list snapshots, unlock). A slow S3 backend can take minutes to
+// list snapshots, but it stays under the 300s write timeout that Coolify's
+// Traefik proxy applies, so the app answers with a clear "timeout" instead of
+// the proxy dropping the connection.
+const DefaultResticTimeout = 4 * time.Minute
+
+// ParseTimeout reads a timeout setting: a duration ("90s", "15m") or whole
+// seconds ("600"). 0 means no limit.
+func ParseTimeout(v string) (time.Duration, error) {
+	v = strings.TrimSpace(v)
+	d, err := time.ParseDuration(v)
+	if n, aerr := strconv.Atoi(v); aerr == nil {
+		d, err = time.Duration(n)*time.Second, nil
+	}
+	if err != nil || d < 0 {
+		return 0, fmt.Errorf("invalid timeout %q: use a duration such as 90s or 15m, or 0 for no limit", v)
+	}
+	return d, nil
 }

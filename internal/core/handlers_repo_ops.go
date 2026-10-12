@@ -3,10 +3,10 @@ package core
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
-	"time"
 )
 
 // This file holds the per-repository restic operations and the download stream.
@@ -23,15 +23,44 @@ func (s *Server) handleRepoTest(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, http.StatusNotFound, "not_found", "repository not found")
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := s.resticContext(r)
 	defer cancel()
 	res := s.app.Runner.Test(ctx, &repo)
-	writeJSON(w, http.StatusOK, map[string]any{
+	body := map[string]any{
 		"ok":          res.OK,
 		"initialized": res.Initialized,
 		"message":     res.Message,
 		"detail":      res.Detail,
-	})
+	}
+	if !res.OK && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		body["code"] = "timeout"
+		body["message"] = res.Message + " " + s.timeoutHint()
+	}
+	writeJSON(w, http.StatusOK, body)
+}
+
+// resticContext bounds a synchronous restic call by the app's ResticTimeout
+// (0 = no limit). It derives from the request, so a client that goes away
+// stops restic too.
+func (s *Server) resticContext(r *http.Request) (context.Context, context.CancelFunc) {
+	if s.app.ResticTimeout <= 0 {
+		return context.WithCancel(r.Context())
+	}
+	return context.WithTimeout(r.Context(), s.app.ResticTimeout)
+}
+
+func (s *Server) timeoutHint() string {
+	return fmt.Sprintf("The repository did not answer within %s; it may just be slow. Try again, or raise the server's -restic-timeout (RESTIC_WEB_RESTIC_TIMEOUT).", s.app.ResticTimeout)
+}
+
+// writeResticError reports a failed synchronous restic call, with code
+// "timeout" when the time limit (rather than restic) ended it.
+func (s *Server) writeResticError(w http.ResponseWriter, code string, err error) {
+	if errors.Is(err, context.DeadlineExceeded) {
+		errorJSON(w, http.StatusOK, "timeout", err.Error()+". "+s.timeoutHint())
+		return
+	}
+	errorJSON(w, http.StatusOK, code, err.Error())
 }
 
 func (s *Server) handleRepoInit(w http.ResponseWriter, r *http.Request) {
@@ -55,10 +84,10 @@ func (s *Server) handleRepoUnlock(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, http.StatusNotFound, "not_found", "repository not found")
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	ctx, cancel := s.resticContext(r)
 	defer cancel()
 	if err := s.app.Runner.Unlock(ctx, &repo); err != nil {
-		errorJSON(w, http.StatusOK, "unlock_failed", err.Error())
+		s.writeResticError(w, "unlock_failed", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "message": "Removed any stale locks."})
@@ -94,7 +123,7 @@ func (s *Server) writeSnapshots(w http.ResponseWriter, r *http.Request, repo *Re
 	if !s.requireRestic(w) {
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := s.resticContext(r)
 	defer cancel()
 	snaps, err := s.app.Runner.Snapshots(ctx, repo, tag)
 	if err != nil {
@@ -102,7 +131,7 @@ func (s *Server) writeSnapshots(w http.ResponseWriter, r *http.Request, repo *Re
 			errorJSON(w, http.StatusOK, "not_initialized", "No repository found here yet. Initialize it first.")
 			return
 		}
-		errorJSON(w, http.StatusOK, "restic_error", err.Error())
+		s.writeResticError(w, "restic_error", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "snapshots": snaps})

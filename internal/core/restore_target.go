@@ -1,7 +1,6 @@
 package core
 
 import (
-	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -86,35 +85,4 @@ func restoreArgs(snapshotID, target string, include []string) ([]string, error) 
 		args = append(args, "--include", p)
 	}
 	return args, nil
-}
-
-// lookupSnapshotPaths returns the paths recorded on a snapshot, or nil if the
-// snapshot cannot be resolved (caller falls back to the requested target).
-func lookupSnapshotPaths(ctx context.Context, runner Runner, repo *Repository, snapshotID string) []string {
-	snapshotID = strings.TrimSpace(snapshotID)
-	if runner == nil || repo == nil || snapshotID == "" {
-		return nil
-	}
-	snaps, err := runner.Snapshots(ctx, repo, "")
-	if err != nil {
-		return nil
-	}
-	var prefixMatch *Snapshot
-	for i := range snaps {
-		s := &snaps[i]
-		if s.ID == snapshotID || s.ShortID == snapshotID {
-			return s.Paths
-		}
-		if strings.HasPrefix(s.ID, snapshotID) {
-			if prefixMatch != nil {
-				// Ambiguous short prefix — do not guess.
-				return nil
-			}
-			prefixMatch = s
-		}
-	}
-	if prefixMatch != nil {
-		return prefixMatch.Paths
-	}
-	return nil
 }

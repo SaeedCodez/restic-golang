@@ -118,6 +118,13 @@ go run ./cmd/restic-web -addr 127.0.0.1:9000 -data ./data
   Durable state is in Postgres, not this directory.
 - `-retain-runs-per-job` — keep only the newest N runs per job on startup
   (`0` = keep all, the default).
+- `-restic-timeout` — how long the API waits on restic for test connection,
+  remove stale locks, and snapshot lists (default `4m`; `90s`, `10m`, or `0` for
+  no limit; env `RESTIC_WEB_RESTIC_TIMEOUT`). Slow S3 storage can take minutes to
+  list snapshots. Keep it below any reverse-proxy response timeout (Coolify's
+  Traefik cuts responses at 300s) so the UI gets a clear "slow repository"
+  message instead of a dropped connection. Runs (backup, restore, …) are not
+  limited by it.
 - `-config` — a legacy `config.json` to import once into a "Default" repository.
 
 Build standalone binaries (the web UI is embedded in `restic-web`):

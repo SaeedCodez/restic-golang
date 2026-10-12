@@ -16,6 +16,8 @@ Global flags:
   --database URL         Postgres URL (env DATABASE_URL)
   --data DIR             data directory (env RESTIC_WEB_DATA; default /app/data or data)
   --json                 machine-readable JSON on stdout
+  --timeout D            limit for repo test/unlock/snapshots, job snapshots
+                         (default 10m; e.g. 90s, 30m; 0 = no limit)
   --quiet, -q            less human chatter
   --help, -h             show help
 

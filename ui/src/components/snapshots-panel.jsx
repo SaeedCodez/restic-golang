@@ -178,6 +178,16 @@ export function SnapshotsPanel({
     refresh();
   }, [refresh, reloadKey]);
 
+  // Listing can take minutes on slow S3 storage; say so instead of leaving a
+  // bare skeleton that looks stuck.
+  const [slow, setSlow] = React.useState(false);
+  React.useEffect(() => {
+    if (!state.loading) return undefined;
+    setSlow(false);
+    const t = setTimeout(() => setSlow(true), 8000);
+    return () => clearTimeout(t);
+  }, [state.loading]);
+
   const startDownload = async (snapshot) => {
     setDownloadingId(snapshot.id);
     const res = await Repositories.download(repositoryId, snapshot.id);
@@ -253,6 +263,11 @@ export function SnapshotsPanel({
         <div className="space-y-2 px-5 pb-5">
           <Skeleton className="h-9 w-full" />
           <Skeleton className="h-9 w-full" />
+          {slow ? (
+            <p className="pt-1 text-sm text-muted-foreground">
+              Still waiting for the repository. On slow storage, listing snapshots can take a few minutes.
+            </p>
+          ) : null}
         </div>
       ) : !payload || !payload.ok ? (
         <div className="px-5 pb-5">
@@ -261,7 +276,9 @@ export function SnapshotsPanel({
             title={
               payload?.code === "not_initialized"
                 ? "This repository is not set up yet"
-                : "Could not list snapshots"
+                : payload?.code === "timeout"
+                  ? "The repository is slow to answer"
+                  : "Could not list snapshots"
             }
             description={
               payload?.code === "not_initialized"

@@ -60,11 +60,20 @@ restic-webctl [global flags] <command> [args]
 | `--database URL` | `DATABASE_URL` | required |
 | `--data DIR` | `RESTIC_WEB_DATA` | `/app/data` if that directory exists, else `data` |
 | `--json` | | JSON on stdout |
+| `--timeout D` | | `10m`; limit for commands that wait on restic directly |
 | `--quiet` / `-q` | | less human chatter |
 | `--help` / `-h` | | help |
 
-`--json`, `--database`, `--data`, and `--quiet` may appear before or after the
-subcommand.
+`--json`, `--database`, `--data`, `--timeout`, and `--quiet` may appear before
+or after the subcommand.
+
+`--timeout` bounds `repo test`, `repo unlock`, `repo snapshots`, and
+`job snapshots`, which run restic and wait for its answer. It takes a duration
+(`90s`, `30m`) or whole seconds; `0` means no limit. On a slow S3 backend these
+can take minutes, so raise it rather than retrying. A timed-out call exits `1`
+with `code: "timeout"`. Runs (backup, restore, check, forget, …) are not
+bounded by it; stop one with `run stop`. Ctrl-C interrupts restic cleanly so it
+removes its repository lock.
 
 ---
 
@@ -87,6 +96,13 @@ With `--json`, failures still print one JSON object on **stdout**:
 
 and the process exits non-zero. Agents should check **both** the exit code and
 `ok` / `code`.
+
+| `code` | Meaning |
+| --- | --- |
+| `busy` | another run holds the repository (`blockingRun` says which) |
+| `timeout` | restic did not answer within `--timeout`; the message keeps restic's last output |
+| `not_initialized` | no restic repository at that location yet |
+| `restic_error` | restic failed; the message is restic's error |
 
 ---
 
@@ -175,7 +191,9 @@ restic-webctl repo restore <id|name> --snapshot ID --target PATH [--wait]
 # When PATH equals a path stored in the snapshot (usual job-folder restore),
 # the app uses restic --target / --include PATH so files land in place and
 # extras under PATH are removed (restic forbids --delete with --target /
-# unless a filter is set).
+# unless a filter is set). The run first reads the snapshot to decide this
+# ("Reading snapshot … to plan the restore" in its log); if that read fails,
+# the restore fails rather than guessing.
 restic-webctl repo download <id|name> --snapshot ID [--wait]
 restic-webctl repo forget <id|name> --snapshot ID [--wait]
 restic-webctl repo reset <id|name> [--wait]
@@ -188,6 +206,12 @@ also reads and verifies every data pack (slow, downloads everything from S3);
 If restic finds damage, the run fails with `error` "the repository check found
 errors" and the run log (`run log <runId>`) holds restic's details and
 suggested `restic repair …` commands. The app never runs repairs itself.
+
+A run's log shows restic's stderr (backend retry warnings, errors). restic
+prints nothing while it opens the repository and loads the index, so when a run
+has been silent for a minute, and again each time the silence doubles, the log
+notes "No output from restic for …; it is still running (pid N)". On S3 that
+usually means restic is waiting on the storage backend.
 
 Local create: `--path DIR`  
 S3 create: `--endpoint URL --bucket NAME [--region R] --access-key K --secret-key S`

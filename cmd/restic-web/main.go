@@ -32,6 +32,19 @@ func main() {
 	dataDir := flag.String("data", "data", "directory for ephemeral files (download workspaces)")
 	dsnFlag := flag.String("database", "", "Postgres URL (default: DATABASE_URL from the environment or .env)")
 	retain := flag.Int("retain-runs-per-job", 0, "keep only the newest N runs per job (0 = keep all)")
+	resticTimeout := core.DefaultResticTimeout
+	if v := os.Getenv("RESTIC_WEB_RESTIC_TIMEOUT"); v != "" {
+		d, err := core.ParseTimeout(v)
+		if err != nil {
+			log.Fatalf("RESTIC_WEB_RESTIC_TIMEOUT: %v", err)
+		}
+		resticTimeout = d
+	}
+	flag.Func("restic-timeout", "limit for the API's test/unlock/list-snapshots restic calls, e.g. 4m or 0 for none (default 4m; env RESTIC_WEB_RESTIC_TIMEOUT)", func(v string) error {
+		d, err := core.ParseTimeout(v)
+		resticTimeout = d
+		return err
+	})
 	flag.Parse()
 
 	dsn := core.ResolveDSN(*dsnFlag)
@@ -49,6 +62,7 @@ func main() {
 		log.Fatalf("could not open data directory: %v", err)
 	}
 	app.RetainRunsPerJob = *retain
+	app.ResticTimeout = resticTimeout
 	if err := app.ImportLegacyConfig(*configPath); err != nil {
 		log.Printf("note: could not import legacy config: %v", err)
 	}

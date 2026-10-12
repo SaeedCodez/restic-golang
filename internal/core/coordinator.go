@@ -174,6 +174,11 @@ func (c *Coordinator) StartInit(repoID string) (*Run, error) {
 // job's folder"), restic is invoked with --target / so absolute snapshot paths
 // are written back in place instead of nested under target, and --include of
 // that folder so --delete cannot touch the rest of the filesystem.
+//
+// Reading the snapshot's paths is part of the run: on a slow backend it can take
+// minutes, so it is logged and can be stopped. If it fails, the restore fails.
+// Guessing is not safe: treating an in-place restore as a plain target would
+// nest a copy inside the live folder and --delete everything else in it.
 func (c *Coordinator) StartRestore(repoID, snapshotID, target string) (*Run, error) {
 	repo, ok := c.app.Repos.Get(repoID)
 	if !ok {
@@ -188,40 +193,48 @@ func (c *Coordinator) StartRestore(repoID, snapshotID, target string) (*Run, err
 		return nil, validf("please provide a target folder for the restore")
 	}
 
-	lookupCtx, lookupCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	paths := lookupSnapshotPaths(lookupCtx, c.app.Runner, &repo, snapshotID)
-	lookupCancel()
-	plan := planResticRestore(target, paths)
-	if _, err := restoreArgs(snapshotID, plan.Target, plan.Include); err != nil {
-		return nil, validf("%s", err.Error())
-	}
-
-	// Ensure the user-facing destination exists. In-place restores use --target /;
-	// MkdirAll on the original folder is best-effort (restic creates missing dirs).
-	if target != "/" {
-		if err := os.MkdirAll(target, 0o755); err != nil {
-			if !isResticRootTarget(plan.Target) {
-				return nil, validf("could not create target folder: %v", err)
-			}
-			log.Printf("restore: could not ensure in-place target %s: %v", target, err)
-		}
-	}
-
-	params := map[string]string{"snapshotId": snapshotID, "target": target}
-	if plan.Target != target {
-		params["resticTarget"] = plan.Target
-	}
 	run := &Run{
 		Kind: KindRestore, Status: StatusStarting, RepositoryID: repo.ID, RepoName: repo.Name,
-		Params: params,
+		Params: map[string]string{"snapshotId": snapshotID, "target": target},
 	}
 	return c.startRun(repo, run, func(ctx context.Context, h *runHandle) (int, error) {
-		if isResticRootTarget(plan.Target) && target != "/" {
-			h.Log("info", "system", "Restoring "+shortID(snapshotID)+" in place to "+target+" (replacing folder contents)")
-		} else {
-			h.Log("info", "system", "Restoring "+shortID(snapshotID)+" to "+target+" (replacing destination contents)")
+		h.Log("info", "system", "Reading snapshot "+shortID(snapshotID)+" to plan the restore…")
+		snaps, err := c.listSnapshots(ctx, h, &repo, "")
+		if err != nil {
+			return 0, fmt.Errorf("could not read snapshot %s to plan the restore: %w", shortID(snapshotID), err)
 		}
-		return c.app.Runner.Restore(ctx, &repo, snapshotID, plan.Target, plan.Include, h)
+		snap, err := matchSnapshot(snaps, snapshotID)
+		if err != nil {
+			return 0, err
+		}
+		if snap.ID != snapshotID {
+			h.Log("info", "system", "Matched snapshot "+snap.ID)
+		}
+		plan := planResticRestore(target, snap.Paths)
+		if _, err := restoreArgs(snap.ID, plan.Target, plan.Include); err != nil {
+			return 0, err
+		}
+		if plan.Target != target {
+			c.app.Runs.mutate(h.id, true, func(r *Run) { r.Params["resticTarget"] = plan.Target })
+		}
+
+		// Ensure the user-facing destination exists. In-place restores use --target /;
+		// MkdirAll on the original folder is best-effort (restic creates missing dirs).
+		if target != "/" {
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				if !isResticRootTarget(plan.Target) {
+					return 0, fmt.Errorf("could not create target folder: %w", err)
+				}
+				log.Printf("restore: could not ensure in-place target %s: %v", target, err)
+			}
+		}
+
+		if isResticRootTarget(plan.Target) && target != "/" {
+			h.Log("info", "system", "Restoring "+shortID(snap.ID)+" in place to "+target+" (replacing folder contents)")
+		} else {
+			h.Log("info", "system", "Restoring "+shortID(snap.ID)+" to "+target+" (replacing destination contents)")
+		}
+		return c.app.Runner.Restore(ctx, &repo, snap.ID, plan.Target, plan.Include, h)
 	})
 }
 
@@ -252,6 +265,20 @@ func (c *Coordinator) StartDownload(repoID, snapshotID string) (*Run, error) {
 		h.Log("info", "system", "Preparing download of snapshot "+shortID(snapshotID))
 		return c.app.Runner.Restore(ctx, &repo, snapshotID, target, nil, h)
 	})
+}
+
+// listSnapshots lists snapshots as a step of a run. It is not streamed, so the
+// log notes each long wait the way streamed restic output does (otherwise a slow
+// repository looks stuck), and restic's pid is recorded on the run so another
+// process can stop this step too.
+func (c *Coordinator) listSnapshots(ctx context.Context, h *runHandle, repo *Repository, tag string) ([]Snapshot, error) {
+	quiet := startQuietNotes(func(silent time.Duration) {
+		h.Log("info", "system", fmt.Sprintf(
+			"Still waiting for restic to list snapshots after %s, most likely on the storage backend.",
+			silent.Round(time.Second)))
+	})
+	defer quiet.stop()
+	return c.runner.Snapshots(withRunSink(ctx, h), repo, tag)
 }
 
 // startRun reserves the repository, creates the durable run, and launches the
@@ -409,7 +436,7 @@ func (c *Coordinator) StartForgetSnapshot(repoID, snapshotID string) (*Run, erro
 	}
 	return c.startRun(repo, run, func(ctx context.Context, h *runHandle) (int, error) {
 		h.Log("info", "system", "Forgetting snapshot "+shortID(snapshotID)+" from repository "+repo.Name)
-		snaps, err := c.runner.Snapshots(ctx, &repo, "")
+		snaps, err := c.listSnapshots(ctx, h, &repo, "")
 		if err != nil {
 			return 0, err
 		}
@@ -464,7 +491,7 @@ func (c *Coordinator) StartForgetJob(jobID string, deleteJob bool) (*Run, error)
 		} else {
 			h.Log("info", "system", fmt.Sprintf("Forgetting all snapshots tagged %s in repository %q", tag, repo.Name))
 		}
-		snaps, err := c.runner.Snapshots(ctx, &repo, tag)
+		snaps, err := c.listSnapshots(ctx, h, &repo, tag)
 		if err != nil {
 			return 0, err
 		}
@@ -505,7 +532,7 @@ func (c *Coordinator) StartResetRepo(repoID string) (*Run, error) {
 	}
 	return c.startRun(repo, run, func(ctx context.Context, h *runHandle) (int, error) {
 		h.Log("info", "system", "Forgetting every snapshot in repository "+repo.Name)
-		snaps, err := c.runner.Snapshots(ctx, &repo, "")
+		snaps, err := c.listSnapshots(ctx, h, &repo, "")
 		if err != nil {
 			return 0, err
 		}
@@ -636,9 +663,10 @@ func (c *Coordinator) finish(ar *activeRun) {
 
 // classifyRun maps restic's exit code (and cancellation) to a terminal status.
 // The cancellation check comes first so a user-stopped run is labeled canceled
-// even on the one exec path (init) that surfaces the interruption as an error.
+// even on exec paths that surface the interruption as an error (init, and a
+// snapshot listing stopped from another process).
 func classifyRun(ar *activeRun, ctx context.Context, code int, err error) (RunStatus, string) {
-	if ar.stopped.Load() || errors.Is(ctx.Err(), context.Canceled) {
+	if ar.stopped.Load() || errors.Is(ctx.Err(), context.Canceled) || errors.Is(err, errInterrupted) {
 		return StatusCanceled, ""
 	}
 	if err != nil {

@@ -126,6 +126,8 @@ restic-webctl --json repo forget <repo> --snapshot <id>  # destructive: confirm 
 | --- | --- |
 | exit `5`, `code: "busy"` | Another run holds the repo. Read `blockingRun`; wait with `run watch <runId>`, or ask before `run stop <runId>`. |
 | "repository is locked" | A crashed restic left a lock. `repo unlock <repo>` removes only stale locks, so it is safe. |
+| exit `1`, `code: "timeout"` | restic did not answer within `--timeout` (default `10m`) on `repo test`/`unlock`/`snapshots` or `job snapshots`. S3 can be that slow: retry with `--timeout 30m`. The message keeps restic's last output. |
+| A run's log is quiet, or says "No output from restic for …" / "Still waiting for restic …" | restic is alive and waiting on the storage backend. Wait, or ask before `run stop <runId>`. |
 | "wrong repository password" | The stored password is wrong. Ask the user; do not guess. |
 | "repository is not initialized" | `repo test <repo>` to confirm, then ask before `repo init <repo>`. |
 | exit `2`, ambiguous id | Use the full id from `repo list` / `job list`. |
