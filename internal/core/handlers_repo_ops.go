@@ -157,6 +157,24 @@ func (s *Server) handleRepoReset(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "runId": run.ID, "run": run})
 }
 
+func (s *Server) handleRepoCheck(w http.ResponseWriter, r *http.Request) {
+	if !s.requireRestic(w) {
+		return
+	}
+	var body struct {
+		ReadData string `json:"readData"`
+	}
+	if !decodeJSONAllowEmpty(w, r, &body) {
+		return
+	}
+	run, err := s.app.Coord.StartCheck(r.PathValue("id"), body.ReadData)
+	if err != nil {
+		writeStartError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "runId": run.ID, "run": run})
+}
+
 func (s *Server) handleRepoDownload(w http.ResponseWriter, r *http.Request) {
 	if !s.requireRestic(w) {
 		return

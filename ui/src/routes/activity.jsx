@@ -28,6 +28,7 @@ const KIND_FILTERS = [
   { value: "restore", label: "Restores" },
   { value: "download", label: "Downloads" },
   { value: "init", label: "Initializations" },
+  { value: "check", label: "Checks" },
 ];
 
 const STATUS_FILTERS = [

@@ -79,6 +79,7 @@ type fakeRunner struct {
 	initCount       int      // number of Init calls, for assertions
 	forgetCalls     []forgetCall
 	forgetSnapCalls []forgetSnapshotsCall
+	checkCalls      []string
 }
 
 type forgetCall struct {
@@ -197,6 +198,24 @@ func (f *fakeRunner) ForgetSnapshots(ctx context.Context, repo *Repository, snap
 	}
 	sink.Log("info", "stdout", "fake forget snapshots applied")
 	return 0, nil
+}
+
+func (f *fakeRunner) Check(ctx context.Context, repo *Repository, readData string, sink RunSink) (int, error) {
+	sink.PID(4242, "faketoken")
+	f.mu.Lock()
+	f.checkCalls = append(f.checkCalls, readData)
+	f.mu.Unlock()
+	if f.streamFn != nil {
+		return f.streamFn(ctx, KindCheck, sink)
+	}
+	sink.Log("info", "stdout", "no errors were found")
+	return 0, nil
+}
+
+func (f *fakeRunner) recordedChecks() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.checkCalls...)
 }
 
 func (f *fakeRunner) recordedForgetSnapshots() []forgetSnapshotsCall {

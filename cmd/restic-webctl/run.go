@@ -54,7 +54,7 @@ func (c *CLI) cmdRun(args []string) int {
 func (c *CLI) runList(args []string) int {
 	fs := newFlagSet("run list")
 	status := fs.String("status", "", "active|finished|exact status")
-	kind := fs.String("kind", "", "backup|restore|init|download|retention")
+	kind := fs.String("kind", "", "backup|restore|init|download|retention|forget|check")
 	job := fs.String("job", "", "job id or name")
 	limit := fs.Int("limit", 0, "max rows")
 	if err := parseFlagSet(fs, args, helpRun()); err != nil {

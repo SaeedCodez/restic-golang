@@ -32,6 +32,7 @@ Examples:
   restic-webctl repo create --name local --backend Local --path /data/repo --password '…'
   restic-webctl job create --name nightly --folder home --repo local
   restic-webctl job run nightly --wait
+  restic-webctl repo check local --read-data-subset 10% --json
   restic-webctl run watch <runId>
   restic-webctl activity --json
 
@@ -68,6 +69,7 @@ func helpRepo() string {
   restic-webctl repo test <id|name>
   restic-webctl repo init <id|name> [--wait]
   restic-webctl repo unlock <id|name>
+  restic-webctl repo check <id|name> [--read-data | --read-data-subset S] [--wait] [--follow]
   restic-webctl repo snapshots <id|name>
   restic-webctl repo restore <id|name> --snapshot ID --target PATH [--wait]
   restic-webctl repo download <id|name> --snapshot ID [--wait]
@@ -76,6 +78,9 @@ func helpRepo() string {
 
 Local create options:  --path DIR
 S3 create options:     --endpoint URL --bucket NAME [--region R] --access-key K --secret-key S
+
+check verifies repository structure; --read-data also reads every data pack,
+--read-data-subset reads part of them (e.g. 10%, 1/5, 500M).
 `
 }
 

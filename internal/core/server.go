@@ -50,6 +50,7 @@ func (s *Server) Routes(static http.Handler) http.Handler {
 	mux.HandleFunc("POST /api/repositories/{id}/download", s.handleRepoDownload)
 	mux.HandleFunc("POST /api/repositories/{id}/forget", s.handleRepoForget)
 	mux.HandleFunc("POST /api/repositories/{id}/reset", s.handleRepoReset)
+	mux.HandleFunc("POST /api/repositories/{id}/check", s.handleRepoCheck)
 
 	mux.HandleFunc("GET /api/folders", s.handleFolderList)
 	mux.HandleFunc("POST /api/folders", s.handleFolderCreate)

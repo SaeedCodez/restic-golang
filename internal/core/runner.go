@@ -59,6 +59,10 @@ type Runner interface {
 	// ForgetSnapshots removes the given snapshot IDs, then prunes unreferenced
 	// data. An empty list is a no-op success (nothing to forget).
 	ForgetSnapshots(ctx context.Context, repo *Repository, snapshotIDs []string, sink RunSink) (int, error)
+	// Check verifies repository integrity (`restic check`). readData is "" for a
+	// structure-only check, "all" for --read-data, or a --read-data-subset value
+	// such as "10%". Exit code 1 means restic found errors (or could not run).
+	Check(ctx context.Context, repo *Repository, readData string, sink RunSink) (int, error)
 }
 
 // resticRunner is the real Runner: it shells out to the restic CLI.
@@ -335,6 +339,32 @@ func (*resticRunner) ForgetSnapshots(ctx context.Context, repo *Repository, snap
 		}
 	}
 	return last, nil
+}
+
+func (*resticRunner) Check(ctx context.Context, repo *Repository, readData string, sink RunSink) (int, error) {
+	args, err := checkArgs(readData)
+	if err != nil {
+		return -1, err
+	}
+	// Plain (non --json) output: restic's human lines read well in the run log
+	// and the format is the same across restic versions.
+	return streamRestic(ctx, repo, KindCheck, sink, args...)
+}
+
+// checkArgs builds `restic check` arguments. readData is "" (structure only),
+// "all" (--read-data), or a --read-data-subset value ("n/t", "x%", or a size).
+func checkArgs(readData string) ([]string, error) {
+	readData = strings.TrimSpace(readData)
+	switch {
+	case readData == "":
+		return []string{"check"}, nil
+	case readData == "all":
+		return []string{"check", "--read-data"}, nil
+	case strings.HasPrefix(readData, "-") || strings.ContainsAny(readData, " \t\n"):
+		return nil, fmt.Errorf("invalid read-data subset %q", readData)
+	default:
+		return []string{"check", "--read-data-subset", readData}, nil
+	}
 }
 
 // forgetArgs builds `restic forget --prune` arguments for a job-scoped policy.

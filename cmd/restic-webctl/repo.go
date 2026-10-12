@@ -54,6 +54,11 @@ func (c *CLI) cmdRepo(args []string) int {
 			return c.fail(err)
 		}
 		return c.repoUnlock(args[1])
+	case "check":
+		if err := requireArgs(args[1:], 1, helpRepo()); err != nil {
+			return c.fail(err)
+		}
+		return c.repoCheck(args[1], args[2:])
 	case "snapshots", "snaps":
 		if err := requireArgs(args[1:], 1, helpRepo()); err != nil {
 			return c.fail(err)
@@ -334,6 +339,29 @@ func (c *CLI) repoUnlock(query string) int {
 		return c.fail(&apiError{Code: "unlock_failed", Message: err.Error()})
 	}
 	return c.okMessage("Removed any stale locks.", nil)
+}
+
+func (c *CLI) repoCheck(query string, args []string) int {
+	repo, err := c.resolveRepo(query)
+	if err != nil {
+		return c.fail(err)
+	}
+	args, wait, follow := parseWaitFollow(args)
+	args, readAll := hasBoolFlag(args, "--read-data")
+	fs := newFlagSet("repo check")
+	subset := fs.String("read-data-subset", "", "read a subset of data packs (n/t, x%, or a size)")
+	if err := parseFlagSet(fs, args, helpRepo()); err != nil {
+		return c.fail(err)
+	}
+	readData := *subset
+	if readAll {
+		if readData != "" {
+			return c.fail(usagef("use either --read-data or --read-data-subset, not both"))
+		}
+		readData = "all"
+	}
+	run, err := c.app.Coord.StartCheck(repo.ID, readData)
+	return c.startAndMaybeWait(run, err, wait, follow)
 }
 
 func (c *CLI) repoSnapshots(query string) int {

@@ -168,6 +168,7 @@ restic-webctl repo delete <id|name>
 restic-webctl repo test <id|name>
 restic-webctl repo init <id|name> [--wait]
 restic-webctl repo unlock <id|name>
+restic-webctl repo check <id|name> [--read-data | --read-data-subset S] [--wait]
 restic-webctl repo snapshots <id|name>
 restic-webctl repo restore <id|name> --snapshot ID --target PATH [--wait]
 # Restore replaces the destination: snapshot files overwrite, extras are deleted.
@@ -179,6 +180,14 @@ restic-webctl repo download <id|name> --snapshot ID [--wait]
 restic-webctl repo forget <id|name> --snapshot ID [--wait]
 restic-webctl repo reset <id|name> [--wait]
 ```
+
+`repo check` runs `restic check` as a tracked run (kind `check`). Without flags
+it verifies repository structure, indexes, snapshots and trees. `--read-data`
+also reads and verifies every data pack (slow, downloads everything from S3);
+`--read-data-subset` reads part of them: `10%`, `1/5`, or a size like `500M`.
+If restic finds damage, the run fails with `error` "the repository check found
+errors" and the run log (`run log <runId>`) holds restic's details and
+suggested `restic repair …` commands. The app never runs repairs itself.
 
 Local create: `--path DIR`  
 S3 create: `--endpoint URL --bucket NAME [--region R] --access-key K --secret-key S`
@@ -239,9 +248,17 @@ The CLI never runs startup reconcile or the scheduler (the server owns those).
 
 ## Agent checklist
 
+Agents that open this repository pick up [`AGENTS.md`](../AGENTS.md) (and
+`CLAUDE.md` for Claude Code). The step-by-step operating guide is the skill at
+[`.claude/skills/restic-webctl/SKILL.md`](../.claude/skills/restic-webctl/SKILL.md).
+For an agent that manages a server without this checkout, copy that folder to
+`~/.claude/skills/restic-webctl/` on the agent's machine.
+
 1. Ensure `DATABASE_URL` is set (inherited in the Coolify container).
 2. Prefer `--json` and check exit codes `0–5`.
 3. Resolve entities by **name** when possible (`job run nightly`).
 4. Use `job run … --wait --json` for synchronous backups.
 5. On exit `5` with `code=busy`, read `blockingRun` and wait or `run stop`.
-6. Do not rely on web login cookies or `RESTIC_WEB_PASSWORD` for CLI ops.
+6. To verify backups, run `repo check <repo> --read-data-subset 10% --json`;
+   a failed run means damage (or an unreachable repo) — read `run log <runId>`.
+7. Do not rely on web login cookies or `RESTIC_WEB_PASSWORD` for CLI ops.
