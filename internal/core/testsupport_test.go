@@ -65,6 +65,10 @@ type fakeRunner struct {
 	snapErr    error
 	unlockErr  error
 
+	// snapshotsFn, if set, replaces snaps/snapErr (e.g. to block like a slow
+	// backend until ctx ends).
+	snapshotsFn func(ctx context.Context, tag string) ([]Snapshot, error)
+
 	// onRestore, if set, is called with the restore target so a test can simulate
 	// restic writing files there (used to exercise the download zip).
 	onRestore func(target string)
@@ -126,6 +130,9 @@ func (f *fakeRunner) Snapshots(ctx context.Context, repo *Repository, tag string
 	f.mu.Lock()
 	f.snapTags = append(f.snapTags, tag)
 	f.mu.Unlock()
+	if f.snapshotsFn != nil {
+		return f.snapshotsFn(ctx, tag)
+	}
 	return f.snaps, f.snapErr
 }
 

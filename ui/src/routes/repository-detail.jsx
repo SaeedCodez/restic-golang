@@ -81,7 +81,7 @@ export default function RepositoryDetail() {
     setBusy("");
     const b = res.body || {};
     setResult({
-      kind: b.ok ? "good" : b.initialized === false ? "info" : "bad",
+      kind: b.ok ? "good" : b.initialized === false && b.code !== "timeout" ? "info" : "bad",
       message: b.message || b.error || "The test failed.",
       detail: b.detail,
     });

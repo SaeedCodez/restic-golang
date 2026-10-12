@@ -2,6 +2,7 @@ package core
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,7 +13,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+	"unicode/utf8"
 )
 
 // RunSink receives the normalized events of a running restic operation. The
@@ -93,6 +96,101 @@ func resticCommand(ctx context.Context, repo *Repository, args ...string) (*exec
 	return cmd, nil
 }
 
+type runSinkKey struct{}
+
+// withRunSink marks ctx as belonging to a run, so non-streamed restic calls made
+// with it (listing snapshots before a restore or forget) record their process id
+// on the run, as streamed ones do. Stop from another process signals that id;
+// without it, such a step could not be stopped from the UI or another CLI.
+func withRunSink(ctx context.Context, sink RunSink) context.Context {
+	return context.WithValue(ctx, runSinkKey{}, sink)
+}
+
+// errInterrupted means restic exited after a SIGINT that did not come from
+// ctx, i.e. a stop requested by another process. The run counts as canceled.
+var errInterrupted = errors.New("restic was interrupted")
+
+// outputSeparately runs cmd and returns its stdout and stderr apart. restic
+// writes --json results to stdout and backend retry warnings to stderr; mixing
+// the two would corrupt the JSON whenever the backend needed a retry.
+func outputSeparately(ctx context.Context, cmd *exec.Cmd) (stdout, stderr []byte, err error) {
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &outBuf, &errBuf
+	if err := cmd.Start(); err != nil {
+		return nil, nil, err
+	}
+	if sink, ok := ctx.Value(runSinkKey{}).(RunSink); ok && cmd.Process != nil {
+		sink.PID(cmd.Process.Pid, procStartToken(cmd.Process.Pid))
+	}
+	err = cmd.Wait()
+	return outBuf.Bytes(), errBuf.Bytes(), err
+}
+
+// outputError explains a failed non-streamed restic call: stopped by ctx,
+// interrupted by another process, not started at all, or a restic failure.
+func outputError(ctx context.Context, what string, stdout, stderr []byte, err error) error {
+	var exitErr *exec.ExitError
+	switch {
+	case ctx.Err() != nil:
+		return newStoppedError(ctx, what, stderr)
+	case exitCode(err) == resticExitInterrupted:
+		return errInterrupted
+	case !errors.As(err, &exitErr):
+		return fmt.Errorf("could not run %s: %w", what, err)
+	default:
+		return classifyRepoError(string(stderr) + "\n" + string(stdout))
+	}
+}
+
+// stoppedError is a restic call that ended because its context did (a timeout
+// or a cancel). It unwraps to ctx.Err(), so callers can tell a timeout apart.
+type stoppedError struct {
+	msg   string
+	cause error
+}
+
+func (e *stoppedError) Error() string { return e.msg }
+func (e *stoppedError) Unwrap() error { return e.cause }
+
+// newStoppedError describes what restic was doing when ctx ended. Once
+// interrupted, restic prints "signal interrupt received" and, if it was still
+// opening the repository, "unable to open config file: context canceled"; the
+// latter would be misread as "not initialized", so all of that is dropped. The
+// last line before it (often a backend retry warning) is kept: it usually says
+// what restic was waiting on.
+func newStoppedError(ctx context.Context, what string, output []byte) error {
+	msg := what + " was canceled"
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		msg = what + " timed out"
+	}
+	if last := lastResticNote(output); last != "" {
+		msg += " (last restic output: " + last + ")"
+	}
+	return &stoppedError{msg: msg, cause: ctx.Err()}
+}
+
+// beforeInterrupt returns restic's output up to its reaction to being
+// interrupted ("signal interrupt received" and the shutdown errors after it).
+func beforeInterrupt(output []byte) string {
+	text := string(output)
+	if i := strings.Index(text, "signal interrupt received"); i >= 0 {
+		text = text[:i]
+	}
+	return strings.TrimSpace(text)
+}
+
+// lastResticNote returns the last line restic printed before reacting to being
+// interrupted.
+func lastResticNote(output []byte) string {
+	lines := strings.Split(beforeInterrupt(output), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if l := strings.TrimSpace(lines[i]); l != "" && !strings.Contains(l, "context canceled") {
+			return l
+		}
+	}
+	return ""
+}
+
 func (*resticRunner) Test(ctx context.Context, repo *Repository) TestResult {
 	cmd, err := resticCommand(ctx, repo, "cat", "config")
 	if err != nil {
@@ -102,6 +200,9 @@ func (*resticRunner) Test(ctx context.Context, repo *Repository) TestResult {
 	text := strings.TrimSpace(string(out))
 	if err == nil {
 		return TestResult{OK: true, Initialized: true, Message: "Connected successfully. The repository is reachable and the password is correct."}
+	}
+	if ctx.Err() != nil {
+		return TestResult{Message: "Gave up before the repository answered: " + newStoppedError(ctx, "restic cat config", out).Error() + ".", Detail: beforeInterrupt(out)}
 	}
 	switch classifyRepoError(text) {
 	case errWrongPassword:
@@ -144,9 +245,9 @@ func (r *resticRunner) Snapshots(ctx context.Context, repo *Repository, tag stri
 	if err != nil {
 		return nil, err
 	}
-	out, err := cmd.CombinedOutput()
+	out, stderr, err := outputSeparately(ctx, cmd)
 	if err != nil {
-		return nil, classifyRepoError(string(out))
+		return nil, outputError(ctx, "restic snapshots", out, stderr, err)
 	}
 	snaps, missing, err := decodeSnapshots(out)
 	if err != nil {
@@ -154,17 +255,23 @@ func (r *resticRunner) Snapshots(ctx context.Context, repo *Repository, tag stri
 	}
 	// Older restic versions (and pre-0.17 backups) omit the snapshot summary.
 	// Fill Size/Files via `restic stats` so the UI does not show "—".
-	r.fillMissingSnapshotSizes(ctx, repo, snaps, missing)
+	if err := r.fillMissingSnapshotSizes(ctx, repo, snaps, missing); err != nil {
+		return nil, err
+	}
 	return snaps, nil
 }
 
 // fillMissingSnapshotSizes runs `restic stats --mode restore-size` for snapshots
 // that have no stored summary. Failures are ignored per-snapshot so a slow or
-// unreachable stats call does not break the list.
-func (r *resticRunner) fillMissingSnapshotSizes(ctx context.Context, repo *Repository, snaps []Snapshot, missing []int) {
+// unreachable stats call does not break the list; only an interruption (a stop
+// from another process) ends it, returning errInterrupted.
+func (r *resticRunner) fillMissingSnapshotSizes(ctx context.Context, repo *Repository, snaps []Snapshot, missing []int) error {
 	if len(missing) == 0 {
-		return
+		return nil
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var interrupted atomic.Bool
 	const workers = 4
 	sem := make(chan struct{}, workers)
 	var wg sync.WaitGroup
@@ -185,6 +292,10 @@ func (r *resticRunner) fillMissingSnapshotSizes(ctx context.Context, repo *Repos
 			defer func() { <-sem }()
 
 			size, files, err := r.snapshotStats(ctx, repo, snaps[idx].ID)
+			if errors.Is(err, errInterrupted) {
+				interrupted.Store(true)
+				cancel()
+			}
 			if err != nil {
 				return
 			}
@@ -195,6 +306,10 @@ func (r *resticRunner) fillMissingSnapshotSizes(ctx context.Context, repo *Repos
 		}()
 	}
 	wg.Wait()
+	if interrupted.Load() {
+		return errInterrupted
+	}
+	return nil
 }
 
 func (*resticRunner) snapshotStats(ctx context.Context, repo *Repository, snapshotID string) (size, files int64, err error) {
@@ -202,9 +317,9 @@ func (*resticRunner) snapshotStats(ctx context.Context, repo *Repository, snapsh
 	if err != nil {
 		return 0, 0, err
 	}
-	out, err := cmd.CombinedOutput()
+	out, stderr, err := outputSeparately(ctx, cmd)
 	if err != nil {
-		return 0, 0, classifyRepoError(string(out))
+		return 0, 0, outputError(ctx, "restic stats", out, stderr, err)
 	}
 	// restic may print progress lines before the JSON object; take the last '{…}'.
 	raw := strings.TrimSpace(string(out))
@@ -228,6 +343,9 @@ func (*resticRunner) Unlock(ctx context.Context, repo *Repository) error {
 	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		if ctx.Err() != nil {
+			return newStoppedError(ctx, "restic unlock", out)
+		}
 		return fmt.Errorf("restic unlock failed: %s", firstLine(strings.TrimSpace(string(out))))
 	}
 	return nil
@@ -422,9 +540,17 @@ func streamRestic(ctx context.Context, repo *Repository, kind RunKind, sink RunS
 	if err := cmd.Start(); err != nil {
 		return -1, fmt.Errorf("could not start restic: %w", err)
 	}
+	pid := 0
 	if cmd.Process != nil {
-		sink.PID(cmd.Process.Pid, procStartToken(cmd.Process.Pid))
+		pid = cmd.Process.Pid
+		sink.PID(pid, procStartToken(pid))
 	}
+
+	quiet := startQuietNotes(func(silent time.Duration) {
+		sink.Log("info", "system", fmt.Sprintf(
+			"No output from restic for %s; it is still running (pid %d), most likely waiting on the storage backend.",
+			silent.Round(time.Second), pid))
+	})
 
 	var (
 		wg      sync.WaitGroup
@@ -447,6 +573,7 @@ func streamRestic(ctx context.Context, repo *Repository, kind RunKind, sink RunS
 		sc := bufio.NewScanner(stderr)
 		sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for sc.Scan() {
+			quiet.touch()
 			line := strings.TrimSpace(sc.Text())
 			if line == "" {
 				continue
@@ -461,7 +588,7 @@ func streamRestic(ctx context.Context, repo *Repository, kind RunKind, sink RunS
 					continue
 				}
 			}
-			sink.Log("warn", "stderr", line)
+			sink.Log("warn", "stderr", clipLogLine(line))
 		}
 		// Keep draining even if the scanner aborted (e.g. an over-long line), so
 		// restic can never block writing to a full pipe and wedge cmd.Wait.
@@ -475,10 +602,19 @@ func streamRestic(ctx context.Context, repo *Repository, kind RunKind, sink RunS
 		sc := bufio.NewScanner(stdout)
 		sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 		for sc.Scan() {
+			quiet.touch()
 			line := sc.Bytes()
 			var m resticMessage
 			if err := json.Unmarshal(line, &m); err != nil {
-				if t := strings.TrimSpace(string(line)); t != "" {
+				if kind == KindRetention || kind == KindForget {
+					if notes, ok := forgetSummary(line); ok {
+						for _, n := range notes {
+							sink.Log("info", "stdout", n)
+						}
+						continue
+					}
+				}
+				if t := clipLogLine(strings.TrimSpace(string(line))); t != "" {
 					capture(t)
 					sink.Log("info", "stdout", t)
 				}
@@ -493,6 +629,7 @@ func streamRestic(ctx context.Context, repo *Repository, kind RunKind, sink RunS
 	}()
 
 	wg.Wait()
+	quiet.stop()
 	code := exitCode(cmd.Wait())
 	if code != 0 && code != resticExitWarnings && code != resticExitNotInitialized &&
 		code != resticExitLocked && code != resticExitBadPassword && code != resticExitInterrupted {
@@ -504,6 +641,132 @@ func streamRestic(ctx context.Context, repo *Repository, kind RunKind, sink RunS
 		}
 	}
 	return code, nil
+}
+
+// restic --json prints nothing while it opens the repository, takes its lock and
+// loads the index, so on a slow backend a healthy run can look dead in the log
+// for many minutes (and a stuck one looks the same). Runs note each long silence
+// after quietNoticeAfter, then each time the silence doubles.
+var (
+	quietNoticeAfter = time.Minute
+	quietPoll        = 5 * time.Second
+)
+
+// quietNotes calls note when restic has been silent for quietNoticeAfter, then
+// again at 2x, 4x, … that long; touch (new output) starts the count over.
+type quietNotes struct {
+	last          atomic.Int64 // unix nanos of the latest output
+	done, stopped chan struct{}
+}
+
+func startQuietNotes(note func(silent time.Duration)) *quietNotes {
+	q := &quietNotes{done: make(chan struct{}), stopped: make(chan struct{})}
+	q.touch()
+	go q.watch(note)
+	return q
+}
+
+func (q *quietNotes) touch() { q.last.Store(time.Now().UnixNano()) }
+
+// stop ends the notes and waits, so none is logged after the caller moves on.
+func (q *quietNotes) stop() {
+	close(q.done)
+	<-q.stopped
+}
+
+func (q *quietNotes) watch(note func(silent time.Duration)) {
+	defer close(q.stopped)
+	t := time.NewTicker(quietPoll)
+	defer t.Stop()
+	var since int64
+	next := quietNoticeAfter
+	for {
+		select {
+		case <-q.done:
+			return
+		case <-t.C:
+		}
+		last := q.last.Load()
+		if last != since {
+			since, next = last, quietNoticeAfter
+		}
+		if silent := time.Since(time.Unix(0, last)); silent >= next {
+			note(silent)
+			next *= 2
+		}
+	}
+}
+
+// maxLogLine caps one run-log line taken verbatim from restic, so an unexpected
+// blob of output cannot bloat the log (and Postgres) or bury the useful lines.
+const maxLogLine = 4 * 1024
+
+func clipLogLine(s string) string {
+	if len(s) <= maxLogLine {
+		return s
+	}
+	cut := maxLogLine
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + fmt.Sprintf(" … (truncated, %d bytes in all)", len(s))
+}
+
+// forgetGroup is one group of `restic forget --json` output: the snapshots of
+// one host/paths/tags combination that the policy keeps and removes.
+type forgetGroup struct {
+	Host   string             `json:"host"`
+	Paths  []string           `json:"paths"`
+	Keep   []forgetGroupEntry `json:"keep"`
+	Remove []forgetGroupEntry `json:"remove"`
+}
+
+type forgetGroupEntry struct {
+	ID string `json:"id"`
+}
+
+// forgetMaxIDs caps how many removed snapshot ids one summary line lists.
+const forgetMaxIDs = 10
+
+// forgetSummary turns `restic forget --json` output (one JSON array of groups,
+// each snapshot with its full backup summary, easily 100KB) into one short line
+// per group. ok is false if line is not that output.
+func forgetSummary(line []byte) (notes []string, ok bool) {
+	line = bytes.TrimSpace(line)
+	if len(line) == 0 || line[0] != '[' {
+		return nil, false
+	}
+	var groups []forgetGroup
+	if err := json.Unmarshal(line, &groups); err != nil {
+		return nil, false
+	}
+	if len(groups) == 0 {
+		return []string{"No snapshots matched; nothing to forget."}, true
+	}
+	for _, g := range groups {
+		note := fmt.Sprintf("Keeping %d snapshot(s), removing ", len(g.Keep))
+		if len(g.Remove) == 0 {
+			note += "none."
+		} else {
+			ids := make([]string, 0, forgetMaxIDs)
+			for i, r := range g.Remove {
+				if i == forgetMaxIDs {
+					break
+				}
+				ids = append(ids, shortID(r.ID))
+			}
+			note += fmt.Sprintf("%d: %s", len(g.Remove), strings.Join(ids, ", "))
+			if more := len(g.Remove) - len(ids); more > 0 {
+				note += fmt.Sprintf(" and %d more", more)
+			}
+			note += "."
+		}
+		if len(groups) > 1 {
+			note = fmt.Sprintf("%s (%s): %s", g.Host, strings.Join(g.Paths, ", "), note)
+		}
+		notes = append(notes, note)
+	}
+	return notes, true
 }
 
 // mapResticMessage converts one parsed restic --json message into sink events.

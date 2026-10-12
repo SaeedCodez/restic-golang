@@ -3,7 +3,15 @@ package main
 import (
 	"os"
 	"strings"
+	"time"
+
+	"restic-web/internal/core"
 )
+
+// defaultTimeout bounds commands that wait on restic directly (repo test,
+// repo unlock, repo/job snapshots). On a slow S3 backend these can legitimately
+// take minutes; runs (backup, restore, check, …) are not bounded by it.
+const defaultTimeout = 10 * time.Minute
 
 // config holds global CLI settings shared by every command.
 type config struct {
@@ -12,12 +20,14 @@ type config struct {
 	json     bool
 	quiet    bool
 	help     bool
+	timeout  time.Duration // 0 = no limit
 }
 
 func parseGlobal(args []string) (*config, []string, error) {
 	cfg := &config{
 		database: strings.TrimSpace(os.Getenv("DATABASE_URL")),
 		dataDir:  defaultDataDir(),
+		timeout:  defaultTimeout,
 	}
 	if v := strings.TrimSpace(os.Getenv("RESTIC_WEB_DATA")); v != "" {
 		cfg.dataDir = v
@@ -44,14 +54,14 @@ func parseGlobal(args []string) (*config, []string, error) {
 			cfg.help = true
 			i++
 		default:
-			return nil, nil, usagef("unknown global flag %q (place --json/--database/--data/--quiet anywhere)", a)
+			return nil, nil, usagef("unknown global flag %q (place --json/--database/--data/--timeout/--quiet anywhere)", a)
 		}
 	}
 	return cfg, args[i:], nil
 }
 
-// extractRelocatableGlobals removes --json/--database/--data/--quiet/--help
-// from anywhere in args (except after `--`) and applies them to cfg.
+// extractRelocatableGlobals removes --json/--database/--data/--timeout/--quiet/
+// --help from anywhere in args (except after `--`) and applies them to cfg.
 func extractRelocatableGlobals(cfg *config, args []string) ([]string, error) {
 	out := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
@@ -84,6 +94,17 @@ func extractRelocatableGlobals(cfg *config, args []string) ([]string, error) {
 			cfg.dataDir = args[i+1]
 			i++
 			continue
+		case "--timeout":
+			if i+1 >= len(args) {
+				return nil, usagef("--timeout requires a value")
+			}
+			d, err := parseTimeout(args[i+1])
+			if err != nil {
+				return nil, err
+			}
+			cfg.timeout = d
+			i++
+			continue
 		}
 		if strings.HasPrefix(a, "--database=") {
 			cfg.database = strings.TrimPrefix(a, "--database=")
@@ -93,9 +114,26 @@ func extractRelocatableGlobals(cfg *config, args []string) ([]string, error) {
 			cfg.dataDir = strings.TrimPrefix(a, "--data=")
 			continue
 		}
+		if strings.HasPrefix(a, "--timeout=") {
+			d, err := parseTimeout(strings.TrimPrefix(a, "--timeout="))
+			if err != nil {
+				return nil, err
+			}
+			cfg.timeout = d
+			continue
+		}
 		out = append(out, a)
 	}
 	return out, nil
+}
+
+// parseTimeout reads a --timeout value (see core.ParseTimeout).
+func parseTimeout(v string) (time.Duration, error) {
+	d, err := core.ParseTimeout(v)
+	if err != nil {
+		return 0, usagef("--timeout: %v", err)
+	}
+	return d, nil
 }
 
 func defaultDataDir() string {

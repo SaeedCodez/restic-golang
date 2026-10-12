@@ -1,8 +1,12 @@
 package main
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	"restic-web/internal/core"
 )
@@ -88,5 +92,47 @@ func TestRepoViewOfRedactsSecrets(t *testing.T) {
 	}
 	if !v.HasPassword || !v.HasSecretKey {
 		t.Fatalf("flags: %+v", v)
+	}
+}
+
+func TestParseGlobalTimeout(t *testing.T) {
+	cfg, _, err := parseGlobal([]string{"repo", "snapshots", "r"})
+	if err != nil || cfg.timeout != defaultTimeout {
+		t.Fatalf("default timeout = %v (err %v), want %v", cfg.timeout, err, defaultTimeout)
+	}
+	for in, want := range map[string]time.Duration{"90s": 90 * time.Second, "30m": 30 * time.Minute, "120": 120 * time.Second, "0": 0} {
+		for _, args := range [][]string{{"--timeout", in, "repo", "snapshots", "r"}, {"repo", "snapshots", "r", "--timeout=" + in}} {
+			cfg, rest, err := parseGlobal(args)
+			if err != nil || cfg.timeout != want || len(rest) != 3 {
+				t.Fatalf("parseGlobal(%v): timeout=%v rest=%v err=%v, want %v", args, cfg.timeout, rest, err, want)
+			}
+		}
+	}
+	for _, bad := range []string{"-5s", "soon", ""} {
+		if _, _, err := parseGlobal([]string{"--timeout", bad, "status"}); exitCodeOf(err) != exitUsage {
+			t.Fatalf("--timeout %q: err=%v, want a usage error", bad, err)
+		}
+	}
+	if _, _, err := parseGlobal([]string{"status", "--timeout"}); exitCodeOf(err) != exitUsage {
+		t.Fatalf("--timeout without a value: err=%v, want a usage error", err)
+	}
+}
+
+func TestResticCallErrorTimeout(t *testing.T) {
+	c := &CLI{cfg: &config{timeout: 30 * time.Second}}
+	stopped := fmt.Errorf("restic snapshots timed out: %w", context.DeadlineExceeded)
+	err := c.resticCallError("restic_error", stopped)
+	ae, ok := err.(*apiError)
+	if !ok || ae.Code != "timeout" || exitCodeOf(err) != exitError {
+		t.Fatalf("timeout error = %#v", err)
+	}
+	if !strings.Contains(ae.Message, "--timeout 30s") || !strings.Contains(ae.Message, "restic snapshots timed out") {
+		t.Fatalf("timeout message = %q", ae.Message)
+	}
+	if ae := c.resticCallError("restic_error", errors.New("boom")).(*apiError); ae.Code != "restic_error" {
+		t.Fatalf("plain failure code = %q", ae.Code)
+	}
+	if ae := c.resticCallError("restic_error", fmt.Errorf("x: %w", context.Canceled)).(*apiError); ae.Code != "interrupted" {
+		t.Fatalf("canceled code = %q", ae.Code)
 	}
 }

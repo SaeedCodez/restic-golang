@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"restic-web/internal/core"
@@ -288,12 +291,41 @@ func (c *CLI) repoDelete(query string) int {
 	return c.okMessage(fmt.Sprintf("Deleted repository %s.", repo.Name), map[string]any{"id": repo.ID})
 }
 
+// resticContext bounds a direct restic call by --timeout and ends it on Ctrl-C
+// or SIGTERM. restic runs in its own process group, so without this an
+// interrupted CLI would exit and leave restic running with its lock held;
+// canceling the context instead sends restic SIGINT so it removes the lock.
+func (c *CLI) resticContext() (context.Context, context.CancelFunc) {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	if c.cfg.timeout <= 0 {
+		return ctx, stop
+	}
+	ctx, cancel := context.WithTimeout(ctx, c.cfg.timeout)
+	return ctx, func() { cancel(); stop() }
+}
+
+// resticCallError turns a failed direct restic call into a CLI error. A timeout
+// gets its own code and says how to raise the limit.
+func (c *CLI) resticCallError(code string, err error) error {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return &apiError{Code: "timeout", Message: err.Error() + ". " + c.timeoutHint()}
+	case errors.Is(err, context.Canceled):
+		return &apiError{Code: "interrupted", Message: err.Error()}
+	}
+	return &apiError{Code: code, Message: err.Error()}
+}
+
+func (c *CLI) timeoutHint() string {
+	return fmt.Sprintf("The limit is --timeout %s and the repository may just be slow: retry with a longer --timeout, or --timeout 0 for no limit.", c.cfg.timeout)
+}
+
 func (c *CLI) repoTest(query string) int {
 	repo, err := c.resolveRepo(query)
 	if err != nil {
 		return c.fail(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := c.resticContext()
 	defer cancel()
 	res := c.app.Runner.Test(ctx, &repo)
 	m := map[string]any{
@@ -301,11 +333,19 @@ func (c *CLI) repoTest(query string) int {
 		"initialized": res.Initialized,
 		"message":     res.Message,
 	}
+	if !res.OK && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		m["code"] = "timeout"
+		res.Message += " " + c.timeoutHint()
+		m["message"] = res.Message
+	}
 	if res.Detail != "" {
 		m["detail"] = res.Detail
 	}
 	if c.cfg.json {
-		return c.writeJSON(m)
+		if code := c.writeJSON(m); code != exitOK || res.OK {
+			return code
+		}
+		return exitError
 	}
 	fmt.Printf("ok:\t%v\n", res.OK)
 	fmt.Printf("initialized:\t%v\n", res.Initialized)
@@ -333,10 +373,10 @@ func (c *CLI) repoUnlock(query string) int {
 	if err != nil {
 		return c.fail(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := c.resticContext()
 	defer cancel()
 	if err := c.app.Runner.Unlock(ctx, &repo); err != nil {
-		return c.fail(&apiError{Code: "unlock_failed", Message: err.Error()})
+		return c.fail(c.resticCallError("unlock_failed", err))
 	}
 	return c.okMessage("Removed any stale locks.", nil)
 }
@@ -373,14 +413,14 @@ func (c *CLI) repoSnapshots(query string) int {
 }
 
 func (c *CLI) printSnapshots(repo *core.Repository, tag string) int {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := c.resticContext()
 	defer cancel()
 	snaps, err := c.app.Runner.Snapshots(ctx, repo, tag)
 	if err != nil {
 		if err.Error() == "repository is not initialized" {
 			return c.fail(&apiError{Code: "not_initialized", Message: "No repository found here yet. Initialize it first."})
 		}
-		return c.fail(&apiError{Code: "restic_error", Message: err.Error()})
+		return c.fail(c.resticCallError("restic_error", err))
 	}
 	if c.cfg.json {
 		return c.writeJSON(map[string]any{"ok": true, "snapshots": snaps})

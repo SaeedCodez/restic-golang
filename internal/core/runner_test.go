@@ -2,8 +2,11 @@ package core
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // TestMapResticMessageBackup feeds captured restic --json backup lines through
@@ -144,5 +147,86 @@ func TestExitCode(t *testing.T) {
 	}
 	if got := exitCode(context.Canceled); got != -1 {
 		t.Fatalf("non-exit error -> %d, want -1", got)
+	}
+}
+
+func TestLastResticNote(t *testing.T) {
+	cases := map[string]string{
+		"Stat(<config/>) returned error, retrying after 1s: connection reset\n" +
+			"signal interrupt received, cleaning up \n" +
+			"Fatal: unable to open config file: context canceled\ns3:https://example/bucket\n": "Stat(<config/>) returned error, retrying after 1s: connection reset",
+		"signal interrupt received, cleaning up \n" +
+			`{"message_type":"exit_error","code":130,"message":"Fatal: unable to open config file: context canceled"}`: "",
+		"": "",
+	}
+	for in, want := range cases {
+		if got := lastResticNote([]byte(in)); got != want {
+			t.Fatalf("lastResticNote(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// forgetSnap is one snapshot as restic forget --json prints it, full summary
+// included (that is what makes the output so large).
+func forgetSnap(id string) string {
+	return `{"time":"2026-10-12T19:17:31Z","tree":"13e4e768","paths":["/data"],"hostname":"h","username":"root",` +
+		`"tags":["resticweb-job:abc"],"program_version":"restic 0.19.1","summary":{"backup_start":"2026-10-12T19:17:31Z",` +
+		`"files_new":5917,"total_files_processed":5917,"total_bytes_processed":151369221},"id":"` + id + `","short_id":"` + id[:8] + `"}`
+}
+
+func forgetOutput(keep, remove int) string {
+	snaps := func(prefix string, n int) string {
+		var parts []string
+		for i := 0; i < n; i++ {
+			parts = append(parts, forgetSnap(fmt.Sprintf("%s%07d%056d", prefix, i, 0)))
+		}
+		if len(parts) == 0 {
+			return "null"
+		}
+		return "[" + strings.Join(parts, ",") + "]"
+	}
+	return `[{"tags":null,"host":"h","paths":["/data"],"keep":` + snaps("k", keep) + `,"remove":` + snaps("r", remove) + `,"reasons":[]}]`
+}
+
+func TestForgetSummary(t *testing.T) {
+	notes, ok := forgetSummary([]byte(forgetOutput(48, 12)))
+	if !ok || len(notes) != 1 {
+		t.Fatalf("forgetSummary: ok=%v notes=%v", ok, notes)
+	}
+	want := "Keeping 48 snapshot(s), removing 12: r0000000, r0000001, r0000002, r0000003, r0000004, r0000005, r0000006, r0000007, r0000008, r0000009 and 2 more."
+	if notes[0] != want {
+		t.Fatalf("summary = %q\nwant      %q", notes[0], want)
+	}
+
+	if notes, _ := forgetSummary([]byte(forgetOutput(3, 0))); len(notes) != 1 || notes[0] != "Keeping 3 snapshot(s), removing none." {
+		t.Fatalf("nothing removed: %v", notes)
+	}
+	if notes, ok := forgetSummary([]byte("[]")); !ok || len(notes) != 1 || !strings.Contains(notes[0], "nothing to forget") {
+		t.Fatalf("empty output: ok=%v notes=%v", ok, notes)
+	}
+
+	two := `[{"host":"a","paths":["/x"],"keep":[{"id":"aaaaaaaaaaaa"}],"remove":null},` +
+		`{"host":"b","paths":["/y","/z"],"keep":[],"remove":[{"id":"bbbbbbbbbbbb"}]}]`
+	notes, _ = forgetSummary([]byte(two))
+	if len(notes) != 2 || notes[0] != "a (/x): Keeping 1 snapshot(s), removing none." ||
+		notes[1] != "b (/y, /z): Keeping 0 snapshot(s), removing 1: bbbbbbbb." {
+		t.Fatalf("two groups: %v", notes)
+	}
+
+	for _, other := range []string{"", "successfully removed 0 locks", `{"message_type":"summary"}`, "[not json"} {
+		if _, ok := forgetSummary([]byte(other)); ok {
+			t.Fatalf("forgetSummary(%q) claimed to recognize it", other)
+		}
+	}
+}
+
+func TestClipLogLine(t *testing.T) {
+	if got := clipLogLine("short"); got != "short" {
+		t.Fatalf("short line changed: %q", got)
+	}
+	long := strings.Repeat("é", maxLogLine) // 2 bytes each: cut lands mid-rune
+	got := clipLogLine(long)
+	if !utf8.ValidString(got) || !strings.HasSuffix(got, fmt.Sprintf("(truncated, %d bytes in all)", len(long))) || len(got) > maxLogLine+64 {
+		t.Fatalf("clipped line: valid=%v len=%d suffix=%q", utf8.ValidString(got), len(got), got[len(got)-40:])
 	}
 }

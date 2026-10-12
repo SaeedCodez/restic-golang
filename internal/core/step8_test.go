@@ -43,7 +43,7 @@ func TestInitRunSuccessAndFailure(t *testing.T) {
 }
 
 func TestRestoreRunCreatesTargetAndSucceeds(t *testing.T) {
-	fake := &fakeRunner{installed: true, streamFn: func(ctx context.Context, kind RunKind, sink RunSink) (int, error) {
+	fake := &fakeRunner{installed: true, snaps: []Snapshot{{ID: "snap1", ShortID: "snap1", Paths: []string{"/src"}}}, streamFn: func(ctx context.Context, kind RunKind, sink RunSink) (int, error) {
 		sink.Progress(Progress{Percent: 1, FilesDone: 3, TotalFiles: 3})
 		sink.Summary(Summary{FilesRestored: 3, BytesRestored: 300})
 		return 0, nil

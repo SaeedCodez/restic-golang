@@ -642,22 +642,43 @@ func (h *runHandle) Log(level, stream, message string) {
 		h.logMu.Unlock()
 		return
 	}
-	h.seq++
-	line := LogLine{Seq: h.seq, TS: time.Now().UTC(), Stream: stream, Level: level, Message: message}
+	line := LogLine{TS: time.Now().UTC(), Stream: stream, Level: level, Message: message}
+	err := h.insertLog(&line)
+	if isUniqueViolation(err) {
+		// Another process appended to this run's log (AppendSystemLine, e.g. a
+		// stop requested from restic-webctl), so this counter is behind. Catch up
+		// and retry; otherwise this and every later line (restic's last output,
+		// "Stopped.") would collide and be lost.
+		ctx, cancel := dbCtx()
+		err = h.store.Pool.QueryRow(ctx,
+			`SELECT COALESCE(MAX(seq), 0) FROM run_log_lines WHERE run_id = $1`, h.id).Scan(&h.seq)
+		cancel()
+		if err == nil {
+			err = h.insertLog(&line)
+		}
+	}
+	h.logMu.Unlock()
+	if err != nil {
+		return
+	}
+	h.store.Bus.publishLog(h.id, line)
+}
+
+// insertLog stores line as the next seq. h.seq advances only on success, so it
+// stays in 1:1 correspondence with durable lines. Callers hold logMu.
+func (h *runHandle) insertLog(line *LogLine) error {
+	line.Seq = h.seq + 1
 	ctx, cancel := dbCtx()
+	defer cancel()
 	_, err := h.store.Pool.Exec(ctx, `
 		INSERT INTO run_log_lines (run_id, seq, ts, stream, level, message)
 		VALUES ($1,$2,$3,$4,$5,$6)`,
 		h.id, line.Seq, line.TS, emptyToNil(line.Stream), line.Level, line.Message,
 	)
-	cancel()
-	if err != nil {
-		h.seq-- // keep seq in 1:1 correspondence with durable lines
-		h.logMu.Unlock()
-		return
+	if err == nil {
+		h.seq = line.Seq
 	}
-	h.logMu.Unlock()
-	h.store.Bus.publishLog(h.id, line)
+	return err
 }
 
 func (h *runHandle) Progress(p Progress) {
