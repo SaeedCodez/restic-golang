@@ -102,3 +102,20 @@ func (c *CLI) resolveJob(query string) (core.Job, error) {
 	}
 	return j, nil
 }
+
+func (c *CLI) resolveDatabase(query string) (core.Database, error) {
+	items := c.app.Databases.List()
+	refs := make([]entityRef, 0, len(items))
+	for _, it := range items {
+		refs = append(refs, entityRef{ID: it.ID, Name: it.Name})
+	}
+	ref, err := resolveRef("database source", query, refs)
+	if err != nil {
+		return core.Database{}, err
+	}
+	d, ok := c.app.Databases.Get(ref.ID)
+	if !ok {
+		return core.Database{}, &apiError{Code: "not_found", Message: fmt.Sprintf("database source %q not found", query)}
+	}
+	return d, nil
+}

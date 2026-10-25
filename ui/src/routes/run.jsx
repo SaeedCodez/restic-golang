@@ -37,7 +37,15 @@ function SummaryStats({ run }) {
   const s = run.summary;
   if (!s) return null;
   const stats =
-    run.kind === "restore" || run.kind === "download"
+    run.kind === "restore_db"
+      ? [
+          { label: "data imported", value: fmtBytes(s.bytesRestored) },
+          run.params?.safetySnapshot
+            ? { label: "safety snapshot", value: shortId(run.params.safetySnapshot), mono: true }
+            : null,
+          s.totalDuration ? { label: "duration", value: fmtDur(s.totalDuration) } : null,
+        ]
+      : run.kind === "restore" || run.kind === "download"
       ? [
           { label: "files restored", value: fmtCount(s.filesRestored) },
           { label: "data restored", value: fmtBytes(s.bytesRestored) },
@@ -114,7 +122,9 @@ function ProgressHero({ run }) {
 
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 tabular text-[13px] text-muted-foreground">
         <span>
-          {fmtCount(p.filesDone)} / {fmtCount(p.totalFiles)} files
+          {run.kind === "restore_db"
+            ? "database import"
+            : `${fmtCount(p.filesDone)} / ${fmtCount(p.totalFiles)} files`}
         </span>
         <span>
           {fmtBytes(p.bytesDone)} / {fmtBytes(p.totalBytes)}
@@ -213,6 +223,12 @@ export default function RunView() {
             {current.params?.target ? (
               <p className="mt-0.5 font-mono text-xs text-muted-foreground">
                 → {current.params.target}
+              </p>
+            ) : null}
+            {current.kind === "restore_db" || current.params?.databaseId ? (
+              <p className="mt-0.5 font-mono text-xs text-muted-foreground">
+                {current.kind === "restore_db" ? "→ " : ""}
+                {current.folderPath}
               </p>
             ) : null}
           </div>

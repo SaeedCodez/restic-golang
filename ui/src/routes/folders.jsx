@@ -1,7 +1,8 @@
 import * as React from "react";
-import { useLocation } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { toast } from "sonner";
-import { FolderOpen, Pencil, Plus, Trash2 } from "lucide-react";
+import { Database, FolderOpen, Pencil, Plus, Server, Trash2 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
@@ -18,9 +19,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { EmptyState } from "@/components/empty";
 import { ListPagination } from "@/components/pagination";
-import { Page, PageHeader } from "@/components/page";
+import { Mono, Page, PageHeader } from "@/components/page";
 import { useConfirm } from "@/components/confirm";
-import { Folders, errorOf } from "@/lib/api";
+import { Databases, Folders, errorOf } from "@/lib/api";
+import { useDockerStatus } from "@/lib/docker";
+import { engineLabel } from "@/lib/snapshots";
 import { PAGE_SIZE, pageSlice } from "@/lib/pagination";
 import { useFetch } from "@/lib/use-fetch";
 
@@ -107,6 +110,107 @@ function FolderDialog({ open, onOpenChange, folder, onSaved }) {
   );
 }
 
+/**
+ * DatabaseSources lists the databases jobs can back up. They are added from the
+ * Coolify/Docker page, where the database is picked from the running servers.
+ */
+function DatabaseSources() {
+  const confirm = useConfirm();
+  const docker = useDockerStatus();
+  const loader = React.useCallback(async () => {
+    const res = await Databases.list();
+    return res.body?.databases || [];
+  }, []);
+  const { data, loading, reload } = useFetch(loader, { initial: [] });
+  const databases = data || [];
+
+  const remove = async (db) => {
+    const ok = await confirm({
+      title: `Delete “${db.name}”?`,
+      description: "This only removes the database from the app's list. The database itself and its backups are not touched.",
+      confirmLabel: "Delete source",
+      destructive: true,
+    });
+    if (!ok) return;
+    const res = await Databases.remove(db.id);
+    if (res.ok) {
+      toast.success(`Database source “${db.name}” deleted.`);
+      reload();
+    } else {
+      toast.error("Could not delete the database source", { description: errorOf(res), duration: 8000 });
+    }
+  };
+
+  return (
+    <section className="mt-10 space-y-3">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h2 className="display text-base font-medium">Databases</h2>
+          <p className="mt-1 text-[13px] text-muted-foreground">
+            Dumped inside their own container, so the backup is consistent while the site stays up.
+          </p>
+        </div>
+        {docker?.available ? (
+          <Button variant="outline" size="sm" asChild>
+            <Link to="/coolify">
+              <Server />
+              Add from {docker.coolify ? "Coolify" : "Docker"}
+            </Link>
+          </Button>
+        ) : null}
+      </div>
+      {loading && databases.length === 0 ? (
+        <Skeleton className="h-16 w-full rounded-xl" />
+      ) : databases.length === 0 ? (
+        <Card>
+          <EmptyState
+            icon={Database}
+            title="No databases yet"
+            description={
+              docker?.available
+                ? "Pick a database on the Coolify/Docker page and it shows up here."
+                : "Database backups need the Docker socket mounted into this app's container."
+            }
+          />
+        </Card>
+      ) : (
+        databases.map((db) => (
+          <Card key={db.id} className="transition-colors hover:border-input">
+            <div className="flex flex-wrap items-center gap-3 p-4">
+              <span className="grid size-8 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
+                <Database className="size-4" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="display flex items-center gap-2 text-sm font-medium">
+                  {db.name}
+                  <Badge variant="outline">{engineLabel(db.engine)}</Badge>
+                </p>
+                <p className="truncate text-xs text-muted-foreground">
+                  <Mono>{db.database}</Mono> on <Mono>{db.container}</Mono>
+                </p>
+              </div>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={() => remove(db)}
+                    className="text-muted-foreground hover:text-destructive"
+                    aria-label={`Delete ${db.name}`}
+                  >
+                    <Trash2 />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Delete</TooltipContent>
+              </Tooltip>
+            </div>
+          </Card>
+        ))
+      )}
+    </section>
+  );
+}
+
 export default function FoldersRoute() {
   const confirm = useConfirm();
   const location = useLocation();
@@ -124,7 +228,7 @@ export default function FoldersRoute() {
   const { data, loading, reload } = useFetch(loader, { initial: [] });
 
   React.useEffect(() => {
-    document.title = "Folders · restic backup manager";
+    document.title = "Sources · restic backup manager";
   }, []);
 
   const remove = async (folder) => {
@@ -155,8 +259,8 @@ export default function FoldersRoute() {
   return (
     <Page>
       <PageHeader
-        title="Backup folders"
-        description="The directories you want protected, named once and reused by any job."
+        title="Backup sources"
+        description="What jobs back up: folders, named once and reused by any job, and databases, dumped with their own tools."
         actions={
           folders.length > 0 ? (
             <Button onClick={() => setDialog({ open: true, folder: null })}>
@@ -167,6 +271,7 @@ export default function FoldersRoute() {
         }
       />
 
+      <h2 className="display mb-3 text-base font-medium">Folders</h2>
       {loading && folders.length === 0 ? (
         <div className="space-y-3">
           <Skeleton className="h-16 w-full rounded-xl" />
@@ -238,6 +343,8 @@ export default function FoldersRoute() {
           />
         </div>
       )}
+
+      <DatabaseSources />
 
       <FolderDialog
         open={dialog.open}

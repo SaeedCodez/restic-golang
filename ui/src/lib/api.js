@@ -67,9 +67,19 @@ export const Repositories = {
   init: (id) => api.post(`/api/repositories/${id}/init`),
   unlock: (id) => api.post(`/api/repositories/${id}/unlock`),
   snapshots: (id) => api.get(`/api/repositories/${id}/snapshots`),
-  restore: (id, snapshotId, target) =>
-    api.post(`/api/repositories/${id}/restore`, { snapshotId, target }),
-  download: (id, snapshotId) => api.post(`/api/repositories/${id}/download`, { snapshotId }),
+  /** include limits the restore to those snapshot paths; stopContainers stops
+   * the site using the destination while it runs. */
+  restore: (id, snapshotId, target, { include, stopContainers } = {}) =>
+    api.post(`/api/repositories/${id}/restore`, { snapshotId, target, include, stopContainers }),
+  download: (id, snapshotId, include) =>
+    api.post(`/api/repositories/${id}/download`, { snapshotId, include }),
+  /** body: { snapshotId, databaseId, into?, safetyBackup? } */
+  restoreDb: (id, body) => api.post(`/api/repositories/${id}/restore-db`, body),
+  /** One folder of a snapshot, for the file browser. */
+  files: (id, snapshotId, path = "/") =>
+    api.get(
+      `/api/repositories/${id}/snapshots/${encodeURIComponent(snapshotId)}/ls?path=${encodeURIComponent(path)}`,
+    ),
   forget: (id, snapshotId) => api.post(`/api/repositories/${id}/forget`, { snapshotId }),
   reset: (id) => api.post(`/api/repositories/${id}/reset`),
 };
@@ -79,6 +89,25 @@ export const Folders = {
   create: (b) => api.post("/api/folders", b),
   update: (id, b) => api.put(`/api/folders/${id}`, b),
   remove: (id) => api.del(`/api/folders/${id}`),
+};
+
+export const Databases = {
+  list: () => api.get("/api/databases"),
+  create: (b) => api.post("/api/databases", b),
+  update: (id, b) => api.put(`/api/databases/${id}`, b),
+  remove: (id) => api.del(`/api/databases/${id}`),
+};
+
+/** Docker / Coolify discovery: what runs on this host, and quick job creation. */
+export const Docker = {
+  status: () => api.get("/api/docker/status"),
+  resources: () => api.get("/api/docker/resources"),
+  databases: (container) =>
+    api.get(`/api/docker/containers/${encodeURIComponent(container)}/databases`),
+  containersUsing: (path) =>
+    api.get(`/api/docker/containers-using?path=${encodeURIComponent(path)}`),
+  /** body: { kind: "folder"|"database", path | container+database, name, repositoryId, schedule? } */
+  createJob: (b) => api.post("/api/docker/jobs", b),
 };
 
 export const Jobs = {

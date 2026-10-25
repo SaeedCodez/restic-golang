@@ -3,7 +3,13 @@ import * as SelectPrimitive from "@radix-ui/react-select";
 import { Check, ChevronDown, ChevronUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-const Select = SelectPrimitive.Root;
+// Radix's hidden native <select> reports "" when a value arrives in the same
+// render as its options (a dialog opening, a field appearing), which would
+// clear the choice. "" is never a valid item value in Radix, so it is ignored.
+function Select({ onValueChange, ...props }) {
+  const guarded = React.useCallback((v) => v !== "" && onValueChange?.(v), [onValueChange]);
+  return <SelectPrimitive.Root onValueChange={onValueChange ? guarded : undefined} {...props} />;
+}
 const SelectGroup = SelectPrimitive.Group;
 const SelectValue = SelectPrimitive.Value;
 

@@ -225,16 +225,96 @@ func (s *Server) handleFolderDelete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// ---- databases -------------------------------------------------------------
+
+func (s *Server) handleDatabaseList(w http.ResponseWriter, r *http.Request) {
+	list := s.app.Databases.List()
+	if list == nil {
+		list = []Database{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "databases": list})
+}
+
+func (s *Server) handleDatabaseCreate(w http.ResponseWriter, r *http.Request) {
+	var d Database
+	if !decodeJSON(w, r, &d) {
+		return
+	}
+	if err := d.Validate(); err != nil {
+		errorJSON(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	created, err := s.app.Databases.Create(d)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "database": created})
+}
+
+func (s *Server) handleDatabaseGet(w http.ResponseWriter, r *http.Request) {
+	d, ok := s.app.Databases.Get(r.PathValue("id"))
+	if !ok {
+		errorJSON(w, http.StatusNotFound, "not_found", "database source not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "database": d})
+}
+
+func (s *Server) handleDatabaseUpdate(w http.ResponseWriter, r *http.Request) {
+	var d Database
+	if !decodeJSON(w, r, &d) {
+		return
+	}
+	if err := d.Validate(); err != nil {
+		errorJSON(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	updated, err := s.app.Databases.Update(r.PathValue("id"), d)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "database": updated})
+}
+
+func (s *Server) handleDatabaseDelete(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if using := s.app.JobsUsingDatabase(id); len(using) > 0 {
+		errorJSON(w, http.StatusConflict, "conflict",
+			"This database source is used by "+jobNames(using)+". Delete or edit those jobs first.")
+		return
+	}
+	if err := s.app.Databases.Delete(id); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 // ---- jobs ------------------------------------------------------------------
 
-// jobView is a job enriched with its folder/repository display fields, its
+// Job source kinds, as the API reports them.
+const (
+	SourceFolder   = "folder"
+	SourceDatabase = "database"
+)
+
+// jobView is a job enriched with its source/repository display fields, its
 // derived restic tag and its latest run, so the jobs screen can answer "is this
 // healthy, and when did it last work?" without a request per job. Schedule
 // health fields are derived (never persisted).
 type jobView struct {
 	Job
-	FolderName    string     `json:"folderName"`
-	FolderPath    string     `json:"folderPath"`
+	SourceKind  string `json:"sourceKind"`
+	SourceLabel string `json:"sourceLabel"`
+	FolderName  string `json:"folderName"`
+	FolderPath  string `json:"folderPath"`
+	// Database source fields, set when SourceKind is "database".
+	DatabaseName  string     `json:"databaseName,omitempty"`
+	Database      string     `json:"database,omitempty"`
+	Engine        string     `json:"engine,omitempty"`
+	Container     string     `json:"container,omitempty"`
 	RepoName      string     `json:"repoName"`
 	Tag           string     `json:"tag"`
 	LastRun       *Run       `json:"lastRun,omitempty"`
@@ -247,9 +327,21 @@ type jobView struct {
 // summarize every job's history in a single pass over the runs.
 func (s *Server) viewWith(job Job, st runStats, backupRunning bool) jobView {
 	v := jobView{Job: job, Tag: job.ResticTag(), LastRun: st.Last, RunCount: st.Count, ScheduleState: ScheduleStateOff}
-	if f, ok := s.app.Folders.Get(job.FolderID); ok {
+	src := s.app.SourceOf(job)
+	v.SourceKind = SourceFolder
+	if job.IsDatabase() {
+		v.SourceKind = SourceDatabase
+	}
+	v.SourceLabel = src.Label()
+	if f := src.Folder; f != nil {
 		v.FolderName = f.Name
 		v.FolderPath = f.Path
+	}
+	if d := src.Database; d != nil {
+		v.DatabaseName = d.Name
+		v.Database = d.DatabaseName
+		v.Engine = d.Engine
+		v.Container = d.Container
 	}
 	if repo, ok := s.app.Repos.Get(job.RepositoryID); ok {
 		v.RepoName = repo.Name
@@ -298,15 +390,25 @@ func (s *Server) handleJobList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "jobs": views})
 }
 
-// validateJobRefs checks that the job's folder and repository exist.
+// validateJobRefs checks that the job's source and repository exist.
 func (s *Server) validateJobRefs(job *Job) error {
+	return s.app.ValidateJobRefs(job)
+}
+
+// ValidateJobRefs checks that a job is well-formed and that its source (folder
+// or database) and repository exist.
+func (a *App) ValidateJobRefs(job *Job) error {
 	if err := job.Validate(); err != nil {
 		return err
 	}
-	if !s.app.Folders.Exists(job.FolderID) {
+	if job.IsDatabase() {
+		if !a.Databases.Exists(job.DatabaseID) {
+			return validf("the chosen database source does not exist")
+		}
+	} else if !a.Folders.Exists(job.FolderID) {
 		return validf("the chosen backup folder does not exist")
 	}
-	if !s.app.Repos.Exists(job.RepositoryID) {
+	if !a.Repos.Exists(job.RepositoryID) {
 		return validf("the chosen storage repository does not exist")
 	}
 	return nil

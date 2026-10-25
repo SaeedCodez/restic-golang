@@ -82,7 +82,57 @@ func restoreArgs(snapshotID, target string, include []string) ([]string, error) 
 	}
 	args := []string{"restore", snapshotID, "--target", target, "--delete", "--json"}
 	for _, p := range filters {
-		args = append(args, "--include", p)
+		args = append(args, "--include", escapeResticPattern(p))
 	}
 	return args, nil
+}
+
+// escapeResticPattern makes a path match only itself as a restic --include:
+// restic reads includes as glob patterns, so a "[", "*" or "?" in a file name
+// would otherwise also match (and --delete) its look-alike siblings.
+func escapeResticPattern(p string) string {
+	var b strings.Builder
+	for _, r := range p {
+		switch r {
+		case '\\', '*', '?', '[':
+			b.WriteRune('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// planResticRestoreSelection is planResticRestore limited to the selected
+// snapshot paths: restic --include's each of them, so --delete only replaces
+// what was selected. Every selected path must be in the snapshot and, for an
+// in-place restore, inside the folder being restored.
+func planResticRestoreSelection(requested string, snapshotPaths, selected []string) (restorePlan, error) {
+	plan := planResticRestore(requested, snapshotPaths)
+	sel := cleanRestoreIncludes(selected)
+	if len(sel) == 0 {
+		return plan, nil
+	}
+	req := filepath.Clean(strings.TrimSpace(requested))
+	for _, p := range sel {
+		if !filepath.IsAbs(p) {
+			return restorePlan{}, fmt.Errorf("selected path %q must be absolute", p)
+		}
+		inSnapshot := false
+		for _, sp := range snapshotPaths {
+			if _, ok := pathWithin(p, filepath.Clean(sp)); ok {
+				inSnapshot = true
+				break
+			}
+		}
+		if !inSnapshot {
+			return restorePlan{}, fmt.Errorf("%s is not in this snapshot", p)
+		}
+		if isResticRootTarget(plan.Target) && req != "/" {
+			if _, ok := pathWithin(p, req); !ok {
+				return restorePlan{}, fmt.Errorf("%s is outside %s, the folder being restored", p, req)
+			}
+		}
+	}
+	plan.Include = sel
+	return plan, nil
 }

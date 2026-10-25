@@ -24,7 +24,7 @@ func TestReconcileMarksRunningAsInterrupted(t *testing.T) {
 		t.Fatalf("precondition: want 1 active run, got %d", len(store.ActiveRuns()))
 	}
 
-	repos := store.reconcile(func(pid int, startToken string) bool { return false })
+	repos, _ := store.reconcile(func(pid int, startToken string) bool { return false })
 
 	if len(store.ActiveRuns()) != 0 {
 		t.Fatal("a run is still reported active after reconcile — the app would be lying")

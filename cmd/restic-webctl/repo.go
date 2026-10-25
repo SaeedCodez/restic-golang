@@ -77,6 +77,16 @@ func (c *CLI) cmdRepo(args []string) int {
 			return c.fail(err)
 		}
 		return c.repoDownload(args[1], args[2:])
+	case "restore-db":
+		if err := requireArgs(args[1:], 1, helpRepo()); err != nil {
+			return c.fail(err)
+		}
+		return c.repoRestoreDB(args[1], args[2:])
+	case "files", "browse":
+		if err := requireArgs(args[1:], 1, helpRepo()); err != nil {
+			return c.fail(err)
+		}
+		return c.repoFiles(args[1], args[2:])
 	case "forget":
 		if err := requireArgs(args[1:], 1, helpRepo()); err != nil {
 			return c.fail(err)
@@ -453,14 +463,79 @@ func (c *CLI) repoRestore(query string, args []string) int {
 	fs := newFlagSet("repo restore")
 	snap := fs.String("snapshot", "", "snapshot id")
 	target := fs.String("target", "", "restore destination directory")
+	var include stringList
+	fs.Var(&include, "include", "restore only this snapshot path (repeatable)")
+	stop := fs.Bool("stop-containers", false, "stop the containers using --target while restoring")
 	if err := parseFlagSet(fs, args, helpRepo()); err != nil {
 		return c.fail(err)
 	}
 	if *snap == "" || *target == "" {
 		return c.fail(usagef("--snapshot and --target are required"))
 	}
-	run, err := c.app.Coord.StartRestore(repo.ID, *snap, *target)
+	run, err := c.app.Coord.StartRestoreWith(repo.ID, *snap, *target, core.RestoreOptions{Include: include, StopContainers: *stop})
 	return c.startAndMaybeWait(run, err, wait, follow)
+}
+
+// repoRestoreDB replaces a database with the dump in a snapshot.
+func (c *CLI) repoRestoreDB(query string, args []string) int {
+	repo, err := c.resolveRepo(query)
+	if err != nil {
+		return c.fail(err)
+	}
+	args, wait, follow := parseWaitFollow(args)
+	fs := newFlagSet("repo restore-db")
+	snap := fs.String("snapshot", "", "snapshot id")
+	dbRef := fs.String("db-source", "", "database source id or name")
+	into := fs.String("into", "", "restore into this database name instead (same server)")
+	noSafety := fs.Bool("no-safety-backup", false, "do not snapshot the current database first")
+	if err := parseFlagSet(fs, args, helpRepo()); err != nil {
+		return c.fail(err)
+	}
+	if *snap == "" || *dbRef == "" {
+		return c.fail(usagef("--snapshot and --db-source are required"))
+	}
+	db, err := c.resolveDatabase(*dbRef)
+	if err != nil {
+		return c.fail(err)
+	}
+	run, err := c.app.Coord.StartRestoreDatabase(repo.ID, *snap, db.ID, core.RestoreDatabaseOptions{Into: *into, SafetyBackup: !*noSafety})
+	return c.startAndMaybeWait(run, err, wait, follow)
+}
+
+// repoFiles lists one folder of a snapshot.
+func (c *CLI) repoFiles(query string, args []string) int {
+	repo, err := c.resolveRepo(query)
+	if err != nil {
+		return c.fail(err)
+	}
+	fs := newFlagSet("repo files")
+	snap := fs.String("snapshot", "", "snapshot id")
+	dir := fs.String("path", "/", "folder inside the snapshot")
+	if err := parseFlagSet(fs, args, helpRepo()); err != nil {
+		return c.fail(err)
+	}
+	if *snap == "" {
+		return c.fail(usagef("--snapshot is required"))
+	}
+	ctx, cancel := c.resticContext()
+	defer cancel()
+	tree, err := c.app.SnapshotTree(ctx, &repo, *snap)
+	if err != nil {
+		return c.fail(c.resticCallError("restic_error", err))
+	}
+	entries, ok := tree.List(*dir)
+	if !ok {
+		return c.fail(&apiError{Code: "not_found", Message: "no such folder in this snapshot: " + *dir})
+	}
+	if c.cfg.json {
+		return c.writeJSON(map[string]any{"ok": true, "path": *dir, "entries": entries})
+	}
+	rows := make([][]string, 0, len(entries))
+	for _, e := range entries {
+		rows = append(rows, []string{e.Type, fmt.Sprintf("%d", e.Size), e.Path})
+	}
+	c.printTable([]string{"TYPE", "SIZE", "PATH"}, rows)
+	return exitOK
 }
 
 func (c *CLI) repoDownload(query string, args []string) int {
@@ -471,13 +546,15 @@ func (c *CLI) repoDownload(query string, args []string) int {
 	args, wait, follow := parseWaitFollow(args)
 	fs := newFlagSet("repo download")
 	snap := fs.String("snapshot", "", "snapshot id")
+	var include stringList
+	fs.Var(&include, "include", "download only this snapshot path (repeatable)")
 	if err := parseFlagSet(fs, args, helpRepo()); err != nil {
 		return c.fail(err)
 	}
 	if *snap == "" {
 		return c.fail(usagef("--snapshot is required"))
 	}
-	run, err := c.app.Coord.StartDownload(repo.ID, *snap)
+	run, err := c.app.Coord.StartDownloadWith(repo.ID, *snap, include)
 	return c.startAndMaybeWait(run, err, wait, follow)
 }
 

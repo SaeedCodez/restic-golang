@@ -11,6 +11,7 @@ import {
   Monitor,
   Moon,
   Play,
+  Server,
   Settings,
   Sun,
 } from "lucide-react";
@@ -24,6 +25,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAuth } from "@/lib/auth";
+import { useDockerStatus } from "@/lib/docker";
 import { useLive } from "@/lib/live";
 import { useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
@@ -32,9 +34,18 @@ const NAV = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { to: "/jobs", label: "Jobs", icon: Play },
   { to: "/repositories", label: "Repositories", icon: HardDrive },
-  { to: "/folders", label: "Folders", icon: FolderOpen },
+  { to: "/folders", label: "Sources", icon: FolderOpen },
   { to: "/activity", label: "Activity", icon: Activity },
 ];
+
+/** The sites tab appears once Docker answers: named for Coolify when Coolify
+ * runs the host, plain Docker otherwise. */
+function useNav() {
+  const docker = useDockerStatus();
+  if (!docker?.available) return NAV;
+  const sites = { to: "/coolify", label: docker.coolify ? "Coolify" : "Docker", icon: Server };
+  return [...NAV.slice(0, 2), sites, ...NAV.slice(2)];
+}
 
 function Brand() {
   return (
@@ -63,9 +74,10 @@ function Brand() {
  * primary sections read as one control rather than loose links.
  */
 function NavTabs({ className, activeCount }) {
+  const nav = useNav();
   return (
     <nav className={cn("flex items-center gap-0.5 rounded-lg bg-muted p-0.5", className)}>
-      {NAV.map(({ to, label, icon: Icon }) => (
+      {nav.map(({ to, label, icon: Icon }) => (
         <NavLink
           key={to}
           to={to}

@@ -69,8 +69,9 @@ type Coordinator struct {
 	runner Runner
 	bus    eventBus
 
-	mu     sync.Mutex
-	active map[string]*activeRun // key: repositoryID
+	mu      sync.Mutex
+	active  map[string]*activeRun // key: repositoryID
+	closing bool                  // Shutdown began: no new runs
 }
 
 func newCoordinator(app *App, store *RunStore, runner Runner, bus eventBus) *Coordinator {
@@ -91,26 +92,49 @@ func (c *Coordinator) StartBackupTriggered(jobID, trigger string) (*Run, error) 
 	if trigger == "" {
 		trigger = TriggerManual
 	}
-	job, folder, repo, err := c.app.resolveJob(jobID)
+	job, src, repo, err := c.app.resolveJob(jobID)
 	if err != nil {
 		return nil, err
 	}
+	label := src.Label()
 	run := &Run{
 		Kind:         KindBackup,
 		Status:       StatusStarting,
 		JobID:        job.ID,
 		RepositoryID: repo.ID,
 		JobName:      job.Name,
-		FolderPath:   folder.Path,
+		FolderPath:   label,
 		RepoName:     repo.Name,
 		Params: map[string]string{
-			"source":  folder.Path,
+			"source":  label,
 			"tag":     job.ResticTag(),
 			"trigger": trigger,
 		},
 	}
-	tag := job.ResticTag()
-	src := folder.Path
+	tags := []string{job.ResticTag()}
+	backup := func(ctx context.Context, h *runHandle) (int, error) {
+		return c.runner.Backup(ctx, &repo, label, tags, h)
+	}
+	if src.Database != nil {
+		db := *src.Database
+		key := databaseKey(db, db.DatabaseName)
+		if err := c.databaseBusy(key, db.DatabaseName); err != nil {
+			return nil, err
+		}
+		tags = append(tags, dbSnapshotTag(db.Engine))
+		run.Params["databaseId"] = db.ID
+		run.Params["databaseKey"] = key
+		run.Params["database"] = db.DatabaseName
+		run.Params["engine"] = db.Engine
+		run.Params["container"] = db.Container
+		backup = func(ctx context.Context, h *runHandle) (int, error) {
+			cont, err := c.resolveDatabaseContainer(ctx, h, db)
+			if err != nil {
+				return 0, err
+			}
+			return c.backupDatabase(ctx, h, &repo, cont, db.Engine, db.DatabaseName, tags, h)
+		}
+	}
 	schedDesc := ""
 	if trigger == TriggerSchedule && job.Schedule != nil {
 		schedDesc = job.Schedule.Describe()
@@ -123,8 +147,8 @@ func (c *Coordinator) StartBackupTriggered(jobID, trigger string) (*Run, error) 
 				h.Log("info", "system", "Started by schedule.")
 			}
 		}
-		h.Log("info", "system", fmt.Sprintf("Backing up %s to repository %q", src, repo.Name))
-		code, err := c.runner.Backup(ctx, &repo, src, []string{tag}, h)
+		h.Log("info", "system", fmt.Sprintf("Backing up %s to repository %q", label, repo.Name))
+		code, err := backup(ctx, h)
 
 		// If the repository has not been initialized yet (restic exit code 10),
 		// create it and retry once, so running a job "just works" without a
@@ -138,7 +162,7 @@ func (c *Coordinator) StartBackupTriggered(jobID, trigger string) (*Run, error) 
 				h.Log("info", "stdout", s)
 			}
 			h.Log("ok", "system", "Repository initialized. Retrying backup…")
-			code, err = c.runner.Backup(ctx, &repo, src, []string{tag}, h)
+			code, err = backup(ctx, h)
 		}
 		return code, err
 	})
@@ -180,6 +204,23 @@ func (c *Coordinator) StartInit(repoID string) (*Run, error) {
 // Guessing is not safe: treating an in-place restore as a plain target would
 // nest a copy inside the live folder and --delete everything else in it.
 func (c *Coordinator) StartRestore(repoID, snapshotID, target string) (*Run, error) {
+	return c.StartRestoreWith(repoID, snapshotID, target, RestoreOptions{})
+}
+
+// RestoreOptions narrows or guards a file restore.
+type RestoreOptions struct {
+	// Include restores only these snapshot paths (files or folders). In place,
+	// only they are replaced; everything else in the folder is left alone.
+	Include []string
+	// StopContainers stops the running containers that use the destination
+	// (e.g. the site whose volume is restored) and starts them again after,
+	// whatever the outcome.
+	StopContainers bool
+}
+
+// StartRestoreWith is StartRestore with a file selection and/or the site's
+// containers stopped while it runs.
+func (c *Coordinator) StartRestoreWith(repoID, snapshotID, target string, opts RestoreOptions) (*Run, error) {
 	repo, ok := c.app.Repos.Get(repoID)
 	if !ok {
 		return nil, notFoundf("repository not found")
@@ -193,9 +234,16 @@ func (c *Coordinator) StartRestore(repoID, snapshotID, target string) (*Run, err
 		return nil, validf("please provide a target folder for the restore")
 	}
 
+	include := cleanRestoreIncludes(opts.Include)
 	run := &Run{
 		Kind: KindRestore, Status: StatusStarting, RepositoryID: repo.ID, RepoName: repo.Name,
 		Params: map[string]string{"snapshotId": snapshotID, "target": target},
+	}
+	if len(include) > 0 {
+		run.Params["include"] = strings.Join(include, "\n")
+	}
+	if opts.StopContainers {
+		run.Params["stopContainers"] = "true"
 	}
 	return c.startRun(repo, run, func(ctx context.Context, h *runHandle) (int, error) {
 		h.Log("info", "system", "Reading snapshot "+shortID(snapshotID)+" to plan the restore…")
@@ -210,7 +258,24 @@ func (c *Coordinator) StartRestore(repoID, snapshotID, target string) (*Run, err
 		if snap.ID != snapshotID {
 			h.Log("info", "system", "Matched snapshot "+snap.ID)
 		}
-		plan := planResticRestore(target, snap.Paths)
+		plan, err := planResticRestoreSelection(target, snap.Paths, include)
+		if err != nil {
+			return 0, err
+		}
+		// A selected path the snapshot lacks would just be deleted by --delete,
+		// so every selection is checked against the snapshot's file list.
+		if len(include) > 0 {
+			h.Log("info", "system", "Checking the selection against the snapshot's files…")
+			tree, err := c.app.SnapshotTree(withRunSink(ctx, h), &repo, snap.ID)
+			if err != nil {
+				return 0, fmt.Errorf("could not list snapshot %s to check the selection: %w", shortID(snap.ID), err)
+			}
+			for _, p := range include {
+				if !tree.Has(p) {
+					return 0, fmt.Errorf("%s is not in snapshot %s", p, shortID(snap.ID))
+				}
+			}
+		}
 		if _, err := restoreArgs(snap.ID, plan.Target, plan.Include); err != nil {
 			return 0, err
 		}
@@ -229,14 +294,81 @@ func (c *Coordinator) StartRestore(repoID, snapshotID, target string) (*Run, err
 			}
 		}
 
-		if isResticRootTarget(plan.Target) && target != "/" {
+		if opts.StopContainers {
+			restart, err := c.stopContainersUsing(ctx, h, target)
+			if err != nil {
+				return 0, err
+			}
+			defer restart()
+		}
+
+		switch {
+		case len(include) > 0:
+			h.Log("info", "system", fmt.Sprintf("Restoring %d selected path(s) from %s to %s (replacing them)", len(include), shortID(snap.ID), target))
+			for _, p := range include {
+				h.Log("info", "system", "  "+p)
+			}
+		case isResticRootTarget(plan.Target) && target != "/":
 			h.Log("info", "system", "Restoring "+shortID(snap.ID)+" in place to "+target+" (replacing folder contents)")
-		} else {
+		default:
 			h.Log("info", "system", "Restoring "+shortID(snap.ID)+" to "+target+" (replacing destination contents)")
 		}
 		return c.app.Runner.Restore(ctx, &repo, snap.ID, plan.Target, plan.Include, h)
 	})
 }
+
+// stopContainersUsing stops the running containers that mount the Docker host
+// location behind a local path, and returns a func that starts them again. The
+// restart runs even if the run was stopped, so a site is never left down.
+func (c *Coordinator) stopContainersUsing(ctx context.Context, h *runHandle, localPath string) (func(), error) {
+	conts, err := c.app.Discovery.ContainersUsingPath(ctx, localPath)
+	if err != nil {
+		return nil, fmt.Errorf("could not find the containers using %s: %w", localPath, err)
+	}
+	if len(conts) == 0 {
+		h.Log("info", "system", "No running container uses "+localPath+"; nothing to stop.")
+		return func() {}, nil
+	}
+	// The stopped containers are recorded on the run, so if this process dies
+	// before restart runs, startup reconciliation starts them again.
+	var stopped []Container
+	record := func(list []Container) {
+		ids := make([]string, len(list))
+		for i, ct := range list {
+			ids[i] = ct.ID
+		}
+		c.app.Runs.mutate(h.id, true, func(r *Run) { r.Params[stoppedContainersParam] = strings.Join(ids, ",") })
+	}
+	restart := func() {
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+		defer cancel()
+		var failed []Container
+		for i := len(stopped) - 1; i >= 0; i-- {
+			ct := stopped[i]
+			if err := c.app.Docker.Start(rctx, ct.ID); err != nil {
+				h.Log("error", "system", "Could not start container "+ct.Name+" again: "+err.Error())
+				failed = append(failed, ct)
+				continue
+			}
+			h.Log("ok", "system", "Started container "+ct.Name+" again.")
+		}
+		record(failed)
+	}
+	for _, ct := range conts {
+		h.Log("info", "system", "Stopping container "+ct.Name+" while restoring…")
+		stopped = append(stopped, ct)
+		record(stopped)
+		if err := c.app.Docker.Stop(ctx, ct.ID); err != nil {
+			restart()
+			return nil, fmt.Errorf("could not stop container %s: %w", ct.Name, err)
+		}
+	}
+	return restart, nil
+}
+
+// stoppedContainersParam lists (comma-separated ids) the containers a restore
+// stopped and has not started again yet.
+const stoppedContainersParam = "stoppedContainers"
 
 // StartDownload restores a snapshot into an app-managed temp workspace as a
 // tracked run; once it succeeds, GET /api/runs/{id}/download streams a zip of
@@ -244,6 +376,11 @@ func (c *Coordinator) StartRestore(repoID, snapshotID, target string) (*Run, err
 // cancelable, and repo-serialized — and avoids coupling run liveness to the
 // download connection.
 func (c *Coordinator) StartDownload(repoID, snapshotID string) (*Run, error) {
+	return c.StartDownloadWith(repoID, snapshotID, nil)
+}
+
+// StartDownloadWith is StartDownload limited to the given snapshot paths.
+func (c *Coordinator) StartDownloadWith(repoID, snapshotID string, include []string) (*Run, error) {
 	repo, ok := c.app.Repos.Get(repoID)
 	if !ok {
 		return nil, notFoundf("repository not found")
@@ -252,9 +389,13 @@ func (c *Coordinator) StartDownload(repoID, snapshotID string) (*Run, error) {
 	if snapshotID == "" {
 		return nil, validf("please choose a snapshot to download")
 	}
+	include = cleanRestoreIncludes(include)
 	run := &Run{
 		Kind: KindDownload, Status: StatusStarting, RepositoryID: repo.ID, RepoName: repo.Name,
 		Params: map[string]string{"snapshotId": snapshotID},
+	}
+	if len(include) > 0 {
+		run.Params["include"] = strings.Join(include, "\n")
 	}
 	return c.startRun(repo, run, func(ctx context.Context, h *runHandle) (int, error) {
 		target := filepath.Join(c.app.DataDir, "downloads", h.id)
@@ -262,8 +403,12 @@ func (c *Coordinator) StartDownload(repoID, snapshotID string) (*Run, error) {
 			return 0, fmt.Errorf("could not create download workspace: %w", err)
 		}
 		c.app.Runs.mutate(h.id, true, func(r *Run) { r.Params["target"] = target })
-		h.Log("info", "system", "Preparing download of snapshot "+shortID(snapshotID))
-		return c.app.Runner.Restore(ctx, &repo, snapshotID, target, nil, h)
+		if len(include) > 0 {
+			h.Log("info", "system", fmt.Sprintf("Preparing download of %d selected path(s) from snapshot %s", len(include), shortID(snapshotID)))
+		} else {
+			h.Log("info", "system", "Preparing download of snapshot "+shortID(snapshotID))
+		}
+		return c.app.Runner.Restore(ctx, &repo, snapshotID, target, include, h)
 	})
 }
 
@@ -285,6 +430,10 @@ func (c *Coordinator) listSnapshots(ctx context.Context, h *runHandle, repo *Rep
 // operation in the background. It returns the created run (or a BusyError).
 func (c *Coordinator) startRun(repo Repository, run *Run, exec runExec) (*Run, error) {
 	c.mu.Lock()
+	if c.closing {
+		c.mu.Unlock()
+		return nil, conflictf("the app is shutting down; start this again once it is back")
+	}
 	if ar := c.active[repo.ID]; ar != nil {
 		// A holder whose run has already reached a terminal state is finishing but
 		// has not yet released the slot; it no longer blocks a new operation, so a
@@ -653,6 +802,37 @@ func (c *Coordinator) Stop(runID string) error {
 }
 
 // finish releases the repository slot when a run ends.
+// Shutdown stops every run this process drives and waits up to timeout for
+// them to wind down, so a restart (e.g. a redeploy) does not cut a restore
+// short: a database restore rolls back, a stopped site is started again, and
+// restic releases its repository lock. No new run starts afterwards. It
+// reports whether all runs finished in time.
+func (c *Coordinator) Shutdown(timeout time.Duration) bool {
+	c.mu.Lock()
+	c.closing = true
+	ids := make([]string, 0, len(c.active))
+	for _, ar := range c.active {
+		ids = append(ids, ar.runID)
+	}
+	c.mu.Unlock()
+	for _, id := range ids {
+		_ = c.Stop(id)
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		c.mu.Lock()
+		n := len(c.active)
+		c.mu.Unlock()
+		if n == 0 {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 func (c *Coordinator) finish(ar *activeRun) {
 	c.mu.Lock()
 	if cur := c.active[ar.repoID]; cur == ar {
@@ -667,6 +847,11 @@ func (c *Coordinator) finish(ar *activeRun) {
 // snapshot listing stopped from another process).
 func classifyRun(ar *activeRun, ctx context.Context, code int, err error) (RunStatus, string) {
 	if ar.stopped.Load() || errors.Is(ctx.Err(), context.Canceled) || errors.Is(err, errInterrupted) {
+		// A stopped run that explains what it left behind (a database restore
+		// cut short) keeps that explanation; the bare cancellation does not.
+		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, errInterrupted) {
+			return StatusCanceled, err.Error()
+		}
 		return StatusCanceled, ""
 	}
 	if err != nil {

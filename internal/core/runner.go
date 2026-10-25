@@ -66,6 +66,17 @@ type Runner interface {
 	// structure-only check, "all" for --read-data, or a --read-data-subset value
 	// such as "10%". Exit code 1 means restic found errors (or could not run).
 	Check(ctx context.Context, repo *Repository, readData string, sink RunSink) (int, error)
+	// BackupStdin backs up what produce writes as one file named filename
+	// (`restic backup --stdin`). If produce fails, restic is stopped before it
+	// sees the end of its input, so no snapshot is saved, and err reports why.
+	// A failure of restic itself is reported by the exit code, as in Backup.
+	BackupStdin(ctx context.Context, repo *Repository, filename string, tags []string, produce func(w io.Writer) error, sink RunSink) (int, error)
+	// Dump streams one file of a snapshot to consume (`restic dump`). A
+	// non-zero exit code means restic did not deliver the whole file; err
+	// reports a failure of consume or of starting restic.
+	Dump(ctx context.Context, repo *Repository, snapshotID, file string, consume func(r io.Reader) error, sink RunSink) (int, error)
+	// List returns every node of a snapshot (`restic ls`).
+	List(ctx context.Context, repo *Repository, snapshotID string) ([]LsNode, error)
 }
 
 // resticRunner is the real Runner: it shells out to the restic CLI.
@@ -529,6 +540,12 @@ func streamRestic(ctx context.Context, repo *Repository, kind RunKind, sink RunS
 	if err != nil {
 		return -1, err
 	}
+	return streamResticCmd(cmd, kind, sink, nil)
+}
+
+// streamResticCmd is streamRestic for a prepared command. started, if set, is
+// called right after restic starts (e.g. to begin feeding its stdin).
+func streamResticCmd(cmd *exec.Cmd, kind RunKind, sink RunSink, started func()) (int, error) {
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return -1, err
@@ -544,6 +561,9 @@ func streamRestic(ctx context.Context, repo *Repository, kind RunKind, sink RunS
 	if cmd.Process != nil {
 		pid = cmd.Process.Pid
 		sink.PID(pid, procStartToken(pid))
+	}
+	if started != nil {
+		started()
 	}
 
 	quiet := startQuietNotes(func(silent time.Duration) {

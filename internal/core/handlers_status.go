@@ -16,6 +16,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"counts": map[string]int{
 			"repositories": s.app.Repos.Count(),
 			"folders":      s.app.Folders.Count(),
+			"databases":    s.app.Databases.Count(),
 			"jobs":         s.app.Jobs.Count(),
 		},
 		"activeRuns": s.app.Runs.ActiveRuns(),

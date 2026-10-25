@@ -4,7 +4,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -407,23 +409,29 @@ func (s *RunStore) AppendSystemLine(id, level, message string) {
 	s.Bus.publishLog(id, line)
 }
 
-func (s *RunStore) reconcile(reap func(pid int, startToken string) bool) []string {
+// reconcile settles the runs a previous process left active. It returns the
+// repositories they used and the containers they had stopped and not yet
+// started again.
+func (s *RunStore) reconcile(reap func(pid int, startToken string) bool) (repos []string, stopped []string) {
 	ctx, cancel := dbCtx()
 	defer cancel()
-	rows, err := s.Pool.Query(ctx, `SELECT id, repository_id, pid, pid_start FROM runs WHERE status IN ('starting','running')`)
+	rows, err := s.Pool.Query(ctx, `SELECT id, repository_id, pid, pid_start, kind, params FROM runs WHERE status IN ('starting','running')`)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	type item struct {
 		id, repoID, startToken string
 		pid                    int
+		kind                   RunKind
+		params                 map[string]string
 	}
 	var items []item
 	for rows.Next() {
 		var it item
 		var pid *int
 		var start *string
-		if err := rows.Scan(&it.id, &it.repoID, &pid, &start); err != nil {
+		var params []byte
+		if err := rows.Scan(&it.id, &it.repoID, &pid, &start, &it.kind, &params); err != nil {
 			continue
 		}
 		if pid != nil {
@@ -432,6 +440,7 @@ func (s *RunStore) reconcile(reap func(pid int, startToken string) bool) []strin
 		if start != nil {
 			it.startToken = *start
 		}
+		_ = json.Unmarshal(params, &it.params)
 		items = append(items, it)
 	}
 	rows.Close()
@@ -442,25 +451,57 @@ func (s *RunStore) reconcile(reap func(pid int, startToken string) bool) []strin
 			s.AppendSystemLine(it.id, "warn", "Reaped an orphaned restic process left running by a previous app instance.")
 		}
 		s.AppendSystemLine(it.id, "error", "The application was restarted while this run was in progress; marking it interrupted.")
+		msg := interruptedMessage(it.kind, it.params)
+		if it.kind == KindRestoreDB {
+			s.AppendSystemLine(it.id, "error", msg)
+		}
 		now := time.Now().UTC()
 		s.mutate(it.id, true, func(r *Run) {
 			r.Status = StatusInterrupted
 			r.FinishedAt = &now
 			if r.Error == "" {
-				r.Error = "interrupted: the application restarted while this run was in progress"
+				r.Error = msg
 			}
 		})
 		s.dropLive(it.id)
 		if it.repoID != "" {
 			repoSet[it.repoID] = true
 		}
+		if ids := it.params[stoppedContainersParam]; ids != "" {
+			s.AppendSystemLine(it.id, "warn", "Containers this run stopped are started again: "+ids)
+			stopped = append(stopped, strings.Split(ids, ",")...)
+		}
 	}
 
-	repos := make([]string, 0, len(repoSet))
+	repos = make([]string, 0, len(repoSet))
 	for id := range repoSet {
 		repos = append(repos, id)
 	}
-	return repos
+	return repos, stopped
+}
+
+// interruptedMessage explains a run the application restart cut short. A
+// database restore may have left its database dropped or half-imported, so it
+// says how to put it back.
+func interruptedMessage(kind RunKind, params map[string]string) string {
+	if kind != KindRestoreDB {
+		return "interrupted: the application restarted while this run was in progress"
+	}
+	db := params["database"]
+	if params["engine"] == EnginePostgres {
+		// PostgreSQL restores import into a temporary database and swap it in
+		// at the very end, so the live database is almost always intact.
+		msg := fmt.Sprintf("interrupted: the application restarted while restoring database %q. It was only replaced if the final swap had started; otherwise it is unchanged", db)
+		if tmp := params["tempDatabase"]; tmp != "" {
+			msg += fmt.Sprintf(", and the temporary database %s can be dropped", tmp)
+		}
+		return msg
+	}
+	msg := fmt.Sprintf("interrupted: the application restarted while restoring database %q, which may now be incomplete", db)
+	if id := params["safetySnapshot"]; id != "" {
+		return msg + fmt.Sprintf("; restore safety snapshot %s into it to put it back as it was", shortID(id))
+	}
+	return msg + "; restore it again from a snapshot"
 }
 
 func (s *RunStore) Begin(run *Run) (*runHandle, error) {

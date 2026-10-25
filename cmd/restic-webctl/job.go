@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -83,17 +84,21 @@ func (c *CLI) jobList() int {
 		if it.LastRun != nil {
 			last = string(it.LastRun.Status)
 		}
+		source := it.FolderName
+		if it.SourceKind == core.SourceDatabase {
+			source = it.DatabaseName
+		}
 		rows = append(rows, []string{
 			it.ID,
 			it.Name,
-			dash(it.FolderName),
+			dash(source),
 			dash(it.RepoName),
 			dash(it.ScheduleState),
 			last,
 			strconv.Itoa(it.RunCount),
 		})
 	}
-	c.printTable([]string{"ID", "NAME", "FOLDER", "REPO", "SCHEDULE", "LAST", "RUNS"}, rows)
+	c.printTable([]string{"ID", "NAME", "SOURCE", "REPO", "SCHEDULE", "LAST", "RUNS"}, rows)
 	return exitOK
 }
 
@@ -108,8 +113,13 @@ func (c *CLI) jobGet(query string) int {
 	}
 	fmt.Printf("id:\t%s\n", v.ID)
 	fmt.Printf("name:\t%s\n", v.Name)
-	fmt.Printf("folder:\t%s (%s)\n", dash(v.FolderName), v.FolderID)
-	fmt.Printf("path:\t%s\n", dash(v.FolderPath))
+	if v.SourceKind == core.SourceDatabase {
+		fmt.Printf("database:\t%s (%s)\n", dash(v.DatabaseName), v.DatabaseID)
+		fmt.Printf("source:\t%s\n", dash(v.SourceLabel))
+	} else {
+		fmt.Printf("folder:\t%s (%s)\n", dash(v.FolderName), v.FolderID)
+		fmt.Printf("path:\t%s\n", dash(v.FolderPath))
+	}
 	fmt.Printf("repo:\t%s (%s)\n", dash(v.RepoName), v.RepositoryID)
 	fmt.Printf("tag:\t%s\n", dash(v.Tag))
 	fmt.Printf("scheduleState:\t%s\n", dash(v.ScheduleState))
@@ -129,6 +139,7 @@ func (c *CLI) jobGet(query string) int {
 type jobFlags struct {
 	name              string
 	folder            string
+	database          string
 	repo              string
 	scheduleEnabled   bool
 	scheduleDisabled  bool
@@ -154,6 +165,7 @@ func parseJobFlags(name string, args []string) (*jobFlags, []string, error) {
 	f := &jobFlags{}
 	fs.StringVar(&f.name, "name", "", "job name")
 	fs.StringVar(&f.folder, "folder", "", "folder id or name")
+	fs.StringVar(&f.database, "db-source", "", "database source id or name (instead of --folder)")
 	fs.StringVar(&f.repo, "repo", "", "repository id or name")
 	fs.StringVar(&f.repo, "repository", "", "alias for --repo")
 	fs.BoolVar(&f.scheduleEnabled, "schedule-enabled", false, "enable schedule")
@@ -244,14 +256,34 @@ func (c *CLI) buildRetention(f *jobFlags, existing *core.JobRetention) *core.Job
 }
 
 func (c *CLI) validateJobRefs(job *core.Job) error {
-	if err := job.Validate(); err != nil {
+	if err := c.app.ValidateJobRefs(job); err != nil {
+		var ve *core.ValidationError
+		if errors.As(err, &ve) {
+			return err
+		}
 		return &core.ValidationError{Msg: err.Error()}
 	}
-	if !c.app.Folders.Exists(job.FolderID) {
-		return &core.ValidationError{Msg: "the chosen backup folder does not exist"}
+	return nil
+}
+
+// applySource points the job at --folder or --db-source (one replaces the other).
+func (c *CLI) applySource(f *jobFlags, job *core.Job) error {
+	if f.folder != "" && f.database != "" {
+		return usagef("use either --folder or --db-source, not both")
 	}
-	if !c.app.Repos.Exists(job.RepositoryID) {
-		return &core.ValidationError{Msg: "the chosen storage repository does not exist"}
+	if f.folder != "" {
+		folder, err := c.resolveFolder(f.folder)
+		if err != nil {
+			return err
+		}
+		job.FolderID, job.DatabaseID = folder.ID, ""
+	}
+	if f.database != "" {
+		db, err := c.resolveDatabase(f.database)
+		if err != nil {
+			return err
+		}
+		job.DatabaseID, job.FolderID = db.ID, ""
 	}
 	return nil
 }
@@ -261,12 +293,8 @@ func (c *CLI) jobCreate(args []string) int {
 	if err != nil {
 		return c.fail(err)
 	}
-	if f.name == "" || f.folder == "" || f.repo == "" {
-		return c.fail(usagef("--name, --folder, and --repo are required\n\n%s", helpJob()))
-	}
-	folder, err := c.resolveFolder(f.folder)
-	if err != nil {
-		return c.fail(err)
+	if f.name == "" || (f.folder == "" && f.database == "") || f.repo == "" {
+		return c.fail(usagef("--name, --folder or --db-source, and --repo are required\n\n%s", helpJob()))
 	}
 	repo, err := c.resolveRepo(f.repo)
 	if err != nil {
@@ -274,8 +302,10 @@ func (c *CLI) jobCreate(args []string) int {
 	}
 	job := core.Job{
 		Meta:         core.Meta{Name: f.name},
-		FolderID:     folder.ID,
 		RepositoryID: repo.ID,
+	}
+	if err := c.applySource(f, &job); err != nil {
+		return c.fail(err)
 	}
 	if f.setSchedule {
 		sched, err := c.buildSchedule(f, nil)
@@ -316,12 +346,8 @@ func (c *CLI) jobUpdate(query string, args []string) int {
 	if f.name != "" {
 		upd.Name = f.name
 	}
-	if f.folder != "" {
-		folder, err := c.resolveFolder(f.folder)
-		if err != nil {
-			return c.fail(err)
-		}
-		upd.FolderID = folder.ID
+	if err := c.applySource(f, &upd); err != nil {
+		return c.fail(err)
 	}
 	if f.repo != "" {
 		repo, err := c.resolveRepo(f.repo)

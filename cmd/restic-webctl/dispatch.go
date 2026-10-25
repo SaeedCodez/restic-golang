@@ -22,6 +22,10 @@ func (c *CLI) dispatch(args []string) int {
 		return c.cmdActivity(rest)
 	case "folder", "folders":
 		return c.cmdFolder(rest)
+	case "database", "databases", "db":
+		return c.cmdDatabase(rest)
+	case "docker", "coolify":
+		return c.cmdDocker(rest)
 	case "repo", "repos", "repository", "repositories":
 		return c.cmdRepo(rest)
 	case "job", "jobs":
