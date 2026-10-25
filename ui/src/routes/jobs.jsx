@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { ArrowRight, Eye, Play, Plus } from "lucide-react";
+import { ArrowRight, Database, Eye, Play, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ListPagination } from "@/components/pagination";
@@ -28,7 +28,7 @@ import { Progress } from "@/components/ui/progress";
 import { Page, PageHeader } from "@/components/page";
 import { StatusBadge } from "@/components/status-badge";
 import { EmptyState } from "@/components/empty";
-import { Folders, Jobs, Repositories, errorOf } from "@/lib/api";
+import { Databases, Folders, Jobs, Repositories, errorOf } from "@/lib/api";
 import { useFetch } from "@/lib/use-fetch";
 import { useLive, useRunStream } from "@/lib/live";
 import { fmtBytes, fmtRelative } from "@/lib/format";
@@ -96,8 +96,9 @@ function JobCard({ job, onRan }) {
           </div>
 
           <div className="mt-1.5 flex items-center gap-2 font-mono text-xs text-muted-foreground">
-            <span className="max-w-fit flex-1 truncate" title={job.folderPath}>
-              {job.folderPath || job.folderName || "?"}
+            {job.sourceKind === "database" ? <Database className="size-3 shrink-0 opacity-60" /> : null}
+            <span className="max-w-fit flex-1 truncate" title={job.sourceLabel}>
+              {job.sourceLabel || job.folderPath || job.folderName || "?"}
             </span>
             <ArrowRight className="size-3 shrink-0 opacity-60" />
             {/* The repository name keeps its full width; the long path gives way. */}
@@ -170,9 +171,11 @@ function JobCard({ job, onRan }) {
   );
 }
 
-function NewJobDialog({ open, onOpenChange, folders, repositories, onCreated }) {
+function NewJobDialog({ open, onOpenChange, folders, databases, repositories, onCreated }) {
   const [name, setName] = React.useState("");
+  const [kind, setKind] = React.useState("folder");
   const [folderId, setFolderId] = React.useState("");
+  const [databaseId, setDatabaseId] = React.useState("");
   const [repositoryId, setRepositoryId] = React.useState("");
   const [autoDaily, setAutoDaily] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
@@ -183,14 +186,20 @@ function NewJobDialog({ open, onOpenChange, folders, repositories, onCreated }) 
     setName("");
     setError("");
     setAutoDaily(false);
+    setKind(folders.length === 0 && databases.length > 0 ? "database" : "folder");
     setFolderId(folders[0]?.id || "");
+    setDatabaseId(databases[0]?.id || "");
     setRepositoryId(repositories[0]?.id || "");
-  }, [open, folders, repositories]);
+  }, [open, folders, databases, repositories]);
+
+  const sourceId = kind === "database" ? databaseId : folderId;
 
   const submit = async (e) => {
     e.preventDefault();
     setBusy(true);
-    const body = { name: name.trim(), folderId, repositoryId };
+    const body = { name: name.trim(), repositoryId };
+    if (kind === "database") body.databaseId = databaseId;
+    else body.folderId = folderId;
     if (autoDaily) {
       body.schedule = { enabled: true, kind: "daily", at: "02:00" };
     }
@@ -212,8 +221,8 @@ function NewJobDialog({ open, onOpenChange, folders, repositories, onCreated }) 
           <DialogHeader>
             <DialogTitle>New backup job</DialogTitle>
             <DialogDescription>
-              A job pairs one folder with one repository. Run it, and its whole history
-              lives on its page.
+              A job pairs one folder or database with one repository. Run it, and its whole
+              history lives on its page.
             </DialogDescription>
           </DialogHeader>
 
@@ -229,21 +238,62 @@ function NewJobDialog({ open, onOpenChange, folders, repositories, onCreated }) 
               />
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="job-folder">Back up this folder</Label>
-              <Select value={folderId} onValueChange={setFolderId}>
-                <SelectTrigger id="job-folder">
-                  <SelectValue placeholder="Choose a folder" />
-                </SelectTrigger>
-                <SelectContent>
-                  {folders.map((f) => (
-                    <SelectItem key={f.id} value={f.id}>
-                      {f.name} — {f.path}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+            {databases.length > 0 ? (
+              <div className="flex gap-0.5 rounded-lg bg-muted p-0.5 text-[13px]">
+                {[
+                  ["folder", "A folder"],
+                  ["database", "A database"],
+                ].map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setKind(value)}
+                    className={cn(
+                      "flex-1 rounded-[6px] px-2.5 py-1.5 transition-colors",
+                      kind === value
+                        ? "bg-background text-foreground dark:bg-accent"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+
+            {kind === "database" ? (
+              <div className="space-y-2">
+                <Label htmlFor="job-database">Back up this database</Label>
+                <Select value={databaseId} onValueChange={setDatabaseId}>
+                  <SelectTrigger id="job-database">
+                    <SelectValue placeholder="Choose a database" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {databases.map((d) => (
+                      <SelectItem key={d.id} value={d.id}>
+                        {d.name} — {d.database} on {d.container}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <Label htmlFor="job-folder">Back up this folder</Label>
+                <Select value={folderId} onValueChange={setFolderId}>
+                  <SelectTrigger id="job-folder">
+                    <SelectValue placeholder="Choose a folder" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {folders.map((f) => (
+                      <SelectItem key={f.id} value={f.id}>
+                        {f.name} — {f.path}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
 
             <div className="space-y-2">
               <Label htmlFor="job-repo">Store it in</Label>
@@ -288,7 +338,7 @@ function NewJobDialog({ open, onOpenChange, folders, repositories, onCreated }) 
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={busy || !name.trim() || !folderId || !repositoryId}>
+            <Button type="submit" disabled={busy || !name.trim() || !sourceId || !repositoryId}>
               {busy ? "Creating…" : "Create job"}
             </Button>
           </DialogFooter>
@@ -306,14 +356,16 @@ export default function JobsRoute() {
   const [page, setPage] = React.useState(1);
 
   const loader = React.useCallback(async () => {
-    const [jobsR, foldersR, reposR] = await Promise.all([
+    const [jobsR, foldersR, dbsR, reposR] = await Promise.all([
       Jobs.list(),
       Folders.list(),
+      Databases.list(),
       Repositories.list(),
     ]);
     return {
       jobs: jobsR.body?.jobs || [],
       folders: foldersR.body?.folders || [],
+      databases: dbsR.body?.databases || [],
       repositories: reposR.body?.repositories || [],
     };
   }, []);
@@ -339,8 +391,9 @@ export default function JobsRoute() {
 
   const jobs = data?.jobs || [];
   const folders = data?.folders || [];
+  const databases = data?.databases || [];
   const repositories = data?.repositories || [];
-  const canCreate = folders.length > 0 && repositories.length > 0;
+  const canCreate = (folders.length > 0 || databases.length > 0) && repositories.length > 0;
   const paged = pageSlice(jobs, page, PAGE_SIZE);
 
   React.useEffect(() => {
@@ -351,7 +404,7 @@ export default function JobsRoute() {
     <Page>
       <PageHeader
         title="Backup jobs"
-        description="A job is a saved pairing of a folder and a repository — the thing you run, and where its history lives."
+        description="A job is a saved pairing of a folder or database and a repository — the thing you run, and where its history lives."
         actions={
           jobs.length > 0 ? (
             <Button onClick={() => setDialogOpen(true)} disabled={!canCreate}>
@@ -373,7 +426,7 @@ export default function JobsRoute() {
           title="No jobs yet"
           description={
             canCreate
-              ? "You have a folder and a repository — pair them into a job and you can back up in one click."
+              ? "You have a source and a repository — pair them into a job and you can back up in one click."
               : "Finish setup on the Dashboard, then come back here to create a job."
           }
           action={
@@ -407,6 +460,7 @@ export default function JobsRoute() {
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         folders={folders}
+        databases={databases}
         repositories={repositories}
         onCreated={reload}
       />

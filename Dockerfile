@@ -4,6 +4,8 @@
 # Required env: DATABASE_URL
 # Optional: PORT (default 8080), ADDR
 # Persistent storage: mount a volume at /app/data for download workspaces.
+# Optional: mount /var/run/docker.sock for Coolify/Docker discovery and database
+# backups (dumps run inside the database containers; no client tools needed here).
 # restic-webctl talks to Postgres directly (no HTTP/auth): needs DATABASE_URL + data dir.
 
 FROM golang:1.25-bookworm AS builder

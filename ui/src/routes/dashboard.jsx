@@ -69,7 +69,7 @@ export function selectUpcoming(jobs) {
 function InventoryStrip({ repoCount, folderCount, jobCount, scheduledCount }) {
   const tiles = [
     { label: "Repositories", value: repoCount, to: "/repositories", icon: HardDrive },
-    { label: "Folders", value: folderCount, to: "/folders", icon: FolderOpen },
+    { label: "Sources", value: folderCount, to: "/folders", icon: FolderOpen },
     { label: "Jobs", value: jobCount, to: "/jobs", icon: Play },
     { label: "Scheduled", value: scheduledCount, to: "/jobs", icon: CalendarClock },
   ];
@@ -347,11 +347,12 @@ export default function Dashboard() {
   const recentFailures = data?.recentFailures || [];
 
   const repoCount = statusData?.counts?.repositories ?? 0;
-  const folderCount = statusData?.counts?.folders ?? 0;
+  // Folders and databases are both sources a job can back up.
+  const folderCount = (statusData?.counts?.folders ?? 0) + (statusData?.counts?.databases ?? 0);
   const jobCount = loading && !data ? (statusData?.counts?.jobs ?? 0) : jobs.length;
 
   const hasFolder =
-    (data?.folders?.length ?? 0) > 0 || (statusData?.counts?.folders ?? 0) > 0;
+    (data?.folders?.length ?? 0) > 0 || folderCount > 0;
   const hasRepo =
     (data?.repositories?.length ?? 0) > 0 || (statusData?.counts?.repositories ?? 0) > 0;
 

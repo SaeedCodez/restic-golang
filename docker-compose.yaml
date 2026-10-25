@@ -6,6 +6,8 @@
 #
 # Coolify (Docker Compose build pack): assigns SERVICE_PASSWORD_DB and
 # SERVICE_FQDN_APP_8080 automatically. Local defaults use password "restic".
+# Once deployed, pick what to back up on the app's Coolify page: new sites and
+# databases show up there without changing this file.
 
 services:
   db:
@@ -50,9 +52,23 @@ services:
       #   /docker-volumes/<volume-name>/_data/wp-content
       # Caution: the app container can modify any named volume on the host.
       - /var/lib/docker/volumes:/docker-volumes:rw
+      # Coolify storages that are host directories rather than named volumes,
+      # under the same path, so every site's data is reachable without editing
+      # this file again.
+      - /data/coolify/applications:/data/coolify/applications:rw
+      - /data/coolify/services:/data/coolify/services:rw
+      # Docker socket: the Coolify page lists sites and databases from their
+      # container labels, database backups run pg_dump / mariadb-dump inside the
+      # database container (docker exec), and a restore can stop a site while it
+      # writes. Caution: access to this socket is root on the host, so anyone
+      # who can log in to this app controls the server's containers.
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       db:
         condition: service_healthy
+    # On redeploy the app stops its runs cleanly first (a database restore
+    # rolls back, a stopped site is started again); give it time to.
+    stop_grace_period: 60s
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/api/auth/status || exit 1"]
       interval: 10s

@@ -7,6 +7,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path"
+	"strings"
 )
 
 // This file holds the per-repository restic operations and the download stream.
@@ -142,13 +144,16 @@ func (s *Server) handleRepoRestore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		SnapshotID string `json:"snapshotId"`
-		Target     string `json:"target"`
+		SnapshotID     string   `json:"snapshotId"`
+		Target         string   `json:"target"`
+		Include        []string `json:"include"`
+		StopContainers bool     `json:"stopContainers"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
 	}
-	run, err := s.app.Coord.StartRestore(r.PathValue("id"), body.SnapshotID, body.Target)
+	run, err := s.app.Coord.StartRestoreWith(r.PathValue("id"), body.SnapshotID, body.Target,
+		RestoreOptions{Include: body.Include, StopContainers: body.StopContainers})
 	if err != nil {
 		writeStartError(w, err)
 		return
@@ -209,17 +214,75 @@ func (s *Server) handleRepoDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		SnapshotID string `json:"snapshotId"`
+		SnapshotID string   `json:"snapshotId"`
+		Include    []string `json:"include"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
 	}
-	run, err := s.app.Coord.StartDownload(r.PathValue("id"), body.SnapshotID)
+	run, err := s.app.Coord.StartDownloadWith(r.PathValue("id"), body.SnapshotID, body.Include)
 	if err != nil {
 		writeStartError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "runId": run.ID, "run": run})
+}
+
+func (s *Server) handleRepoRestoreDatabase(w http.ResponseWriter, r *http.Request) {
+	if !s.requireRestic(w) {
+		return
+	}
+	body := struct {
+		SnapshotID   string `json:"snapshotId"`
+		DatabaseID   string `json:"databaseId"`
+		Into         string `json:"into"`
+		SafetyBackup *bool  `json:"safetyBackup"`
+	}{}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if !s.requireDocker(w, r) {
+		return
+	}
+	opts := RestoreDatabaseOptions{Into: body.Into, SafetyBackup: body.SafetyBackup == nil || *body.SafetyBackup}
+	run, err := s.app.Coord.StartRestoreDatabase(r.PathValue("id"), body.SnapshotID, body.DatabaseID, opts)
+	if err != nil {
+		writeStartError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "runId": run.ID, "run": run})
+}
+
+// handleSnapshotLs lists one directory of a snapshot for the file browser. The
+// first call lists the whole snapshot with restic (slow on remote storage);
+// later calls for the same snapshot are served from memory.
+func (s *Server) handleSnapshotLs(w http.ResponseWriter, r *http.Request) {
+	if !s.requireRestic(w) {
+		return
+	}
+	repo, ok := s.app.Repos.Get(r.PathValue("id"))
+	if !ok {
+		errorJSON(w, http.StatusNotFound, "not_found", "repository not found")
+		return
+	}
+	snapshotID := strings.TrimSpace(r.PathValue("sid"))
+	dir := r.URL.Query().Get("path")
+	if dir == "" {
+		dir = "/"
+	}
+	ctx, cancel := s.resticContext(r)
+	defer cancel()
+	tree, err := s.app.SnapshotTree(ctx, &repo, snapshotID)
+	if err != nil {
+		s.writeResticError(w, "restic_error", err)
+		return
+	}
+	entries, ok := tree.List(dir)
+	if !ok {
+		errorJSON(w, http.StatusNotFound, "not_found", "no such folder in this snapshot: "+dir)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "path": path.Clean("/" + dir), "entries": entries})
 }
 
 // handleRunDownload streams a zip of a completed download run's workspace.

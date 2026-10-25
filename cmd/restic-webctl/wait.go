@@ -2,8 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"restic-web/internal/core"
@@ -14,10 +17,20 @@ func isTerminalStatus(status core.RunStatus) bool {
 }
 
 // waitForRun polls run status (and optionally logs) until terminal.
+//
+// The run executes in this process, so being killed would abandon it midway:
+// a database restore would not roll back and a stopped site would stay down.
+// The first Ctrl-C (or SIGTERM/SIGHUP) therefore stops the run cleanly and
+// keeps waiting for it to wind down; a second one exits at once.
 func (c *CLI) waitForRun(runID string, followLogs bool) (*core.Run, error) {
 	after := int64(0)
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
+
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(sigs)
+	stopping := false
 
 	for {
 		run, ok := c.app.Runs.Get(runID)
@@ -31,7 +44,7 @@ func (c *CLI) waitForRun(runID string, followLogs bool) (*core.Run, error) {
 				return nil, err
 			}
 		} else if !c.cfg.json && !c.cfg.quiet {
-			fmt.Fprintf(os.Stderr, "\r%s %s %.0f%%   ", shortID(runID), st, run.Progress.Percent)
+			fmt.Fprintf(os.Stderr, "\r%s %s %.0f%%   ", shortID(runID), st, run.Progress.Percent*100)
 		}
 
 		if isTerminalStatus(st) {
@@ -44,7 +57,19 @@ func (c *CLI) waitForRun(runID string, followLogs bool) (*core.Run, error) {
 			return run, nil
 		}
 
-		<-ticker.C
+		select {
+		case <-ticker.C:
+		case sig := <-sigs:
+			if stopping {
+				fmt.Fprintf(os.Stderr, "\n%v again: exiting without waiting for run %s\n", sig, shortID(runID))
+				os.Exit(exitConflict)
+			}
+			stopping = true
+			fmt.Fprintf(os.Stderr, "\n%v: stopping run %s and waiting for it to finish (again to exit now)\n", sig, shortID(runID))
+			if err := c.app.Coord.Stop(runID); err != nil && !errors.Is(err, core.ErrRunNotActive) {
+				fmt.Fprintf(os.Stderr, "could not stop the run: %v\n", err)
+			}
+		}
 	}
 }
 
@@ -143,7 +168,7 @@ func summarizeProgress(run *core.Run) string {
 	if run == nil {
 		return ""
 	}
-	pct := run.Progress.Percent
+	pct := run.Progress.Percent * 100 // restic reports a 0–1 fraction
 	cur := run.Progress.CurrentFile
 	if cur != "" {
 		return fmt.Sprintf("%.0f%% %s", pct, cur)

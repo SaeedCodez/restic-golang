@@ -20,10 +20,14 @@ Rules that apply every time:
 1. Always pass `--json` and check **both** the exit code and the `ok` field.
 2. **Restore replaces the destination.** Files not in the snapshot are deleted
    from `--target`. Restore into a fresh scratch directory unless the user
-   explicitly asked to overwrite a specific path.
+   explicitly asked to overwrite a specific path. `repo restore-db` drops and
+   recreates the database: use `--into <name>_restored` unless the user
+   explicitly asked to replace that database.
 3. `repo forget`, `repo reset`, `job forget`, `job delete --forget`,
-   `repo delete`, `job delete`, `folder delete` are destructive. Get the user's
-   explicit confirmation, naming the exact repo/job/snapshot, before running them.
+   `repo delete`, `job delete`, `folder delete`, `database delete`,
+   `repo restore-db` (without `--into`) and `repo restore --stop-containers`
+   are destructive or disruptive. Get the user's explicit confirmation, naming
+   the exact repo/job/snapshot/database, before running them.
 4. Exit `5` with `code: "busy"` means another run holds the repository. Read
    `blockingRun`, then wait or ask before `run stop`.
 5. Never print or log repository passwords or S3 secret keys.
@@ -49,7 +53,10 @@ cmd/restic-web/      server binary (embeds the built UI)
 cmd/restic-webctl/   control CLI; one file per command group
 internal/core/       app, stores, coordinator, runner, HTTP handlers
   coordinator.go     per-repository locking; Start* for every run kind
+  coordinator_db.go  database backup/restore runs
   runner.go          Runner interface + real restic runner
+  docker.go          Docker interface + Engine API client (tests use fakeDocker)
+  discovery.go       Coolify/Docker sites, volumes and databases
   migrations/        goose SQL migrations (run on startup)
 ui/                  React + Tailwind + shadcn/ui source
 docs/cli.md          CLI reference
@@ -63,5 +70,9 @@ Conventions:
   `testsupport_test.go`, an API route in `server.go`, a CLI subcommand, a label
   in `ui/src/lib/runs.js`, and a line in `docs/cli.md` and `README.md`.
 - All restic execution goes through the `Runner` interface, so tests use
-  `fakeRunner` and need no restic binary.
+  `fakeRunner` and need no restic binary. All Docker access goes through the
+  `Docker` interface (`fakeDocker` in tests).
+- `RESTIC_WEB_IT=1 go test ./internal/core -run Integration` runs the
+  integration tests against real restic and real PostgreSQL/MariaDB/MySQL
+  containers on the local Docker.
 - Run `gofmt` and `go test ./...` before calling a change done.

@@ -1,6 +1,7 @@
 import * as React from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowDownToLine, Camera, FolderInput, RefreshCw, Trash2 } from "lucide-react";
+import { ArrowDownToLine, Camera, Database, FolderInput, FolderSearch, RefreshCw, Trash2 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import {
@@ -19,7 +20,11 @@ import { EmptyState } from "@/components/empty";
 import { Mono } from "@/components/page";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useConfirm } from "@/components/confirm";
+import { DbRestoreDialog } from "@/components/db-restore-dialog";
+import { SnapshotBrowser } from "@/components/snapshot-browser";
 import { Jobs, Repositories } from "@/lib/api";
+import { useContainersUsing } from "@/lib/docker";
+import { dumpDatabaseName, engineLabel, isSafetySnapshot, snapshotEngine } from "@/lib/snapshots";
 import { fmtBytes, fmtCount, fmtRelative, fmtTime, shortId } from "@/lib/format";
 import { handleStartResponse } from "@/lib/start-run";
 
@@ -40,21 +45,27 @@ function RestoreDialog({
   const hasDefault = Boolean(defaultTarget && defaultTarget.trim());
   const [custom, setCustom] = React.useState(false);
   const [target, setTarget] = React.useState("");
+  const [stopSite, setStopSite] = React.useState(true);
   const [busy, setBusy] = React.useState(false);
 
   React.useEffect(() => {
     if (!open) return;
     setCustom(!hasDefault);
     setTarget(hasDefault ? defaultTarget.trim() : "");
+    setStopSite(true);
   }, [open, hasDefault, defaultTarget]);
 
   const destination = (custom ? target : defaultTarget).trim();
+  // Restoring a site's volume in place: its containers can be stopped meanwhile.
+  const containers = useContainersUsing(open && hasDefault && !custom ? destination : "");
 
   const start = async (e) => {
     e.preventDefault();
     if (!destination) return;
     setBusy(true);
-    const res = await Repositories.restore(repositoryId, snapshot.id, destination);
+    const res = await Repositories.restore(repositoryId, snapshot.id, destination, {
+      stopContainers: stopSite && containers.length > 0,
+    });
     setBusy(false);
     if (handleStartResponse(res, navigate, "Could not start the restore.", { stay })) {
       onOpenChange(false);
@@ -111,6 +122,25 @@ function RestoreDialog({
               </label>
             ) : null}
 
+            {containers.length > 0 ? (
+              <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border px-3 py-2.5">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 size-4 accent-foreground"
+                  checked={stopSite}
+                  onChange={(e) => setStopSite(e.target.checked)}
+                  disabled={busy}
+                />
+                <span>
+                  <span className="block text-sm font-medium">Stop the site while restoring</span>
+                  <span className="block text-[13px] text-muted-foreground">
+                    {containers.map((c) => c.name).join(", ")} stop first and start again afterwards,
+                    so nothing writes to the folder mid-restore.
+                  </span>
+                </span>
+              </label>
+            ) : null}
+
             {!hasDefault || custom ? (
               <div className="space-y-2">
                 <Label htmlFor="restore-target">
@@ -155,6 +185,8 @@ export function SnapshotsPanel({
   reloadKey,
   /** When set (job page), restore defaults to this absolute folder path. */
   defaultRestoreTarget,
+  /** When set (database job page), database restores default to this source. */
+  databaseSource,
   /** When set, allow forgetting every snapshot for this job. */
   jobId,
   /** Keep the user on this page after starting restore/download/forget. */
@@ -164,6 +196,8 @@ export function SnapshotsPanel({
   const confirm = useConfirm();
   const [state, setState] = React.useState({ loading: true, payload: null });
   const [restoring, setRestoring] = React.useState(null);
+  const [restoringDb, setRestoringDb] = React.useState(null);
+  const [browsing, setBrowsing] = React.useState(null);
   const [downloadingId, setDownloadingId] = React.useState(null);
   const [forgettingId, setForgettingId] = React.useState(null);
   const [forgettingAll, setForgettingAll] = React.useState(false);
@@ -311,7 +345,23 @@ export function SnapshotsPanel({
               {snapshots.map((s) => (
                 <TableRow key={s.id} className="transition-colors hover:bg-accent/40">
                   <TableCell>
-                    <Mono>{s.shortId || shortId(s.id)}</Mono>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <Mono>{s.shortId || shortId(s.id)}</Mono>
+                      {snapshotEngine(s) ? (
+                        <Badge variant="outline" title={engineLabel(snapshotEngine(s))}>
+                          <Database className="size-3" />
+                          {dumpDatabaseName(s)}
+                        </Badge>
+                      ) : null}
+                      {isSafetySnapshot(s) ? (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Badge variant="warning">safety copy</Badge>
+                          </TooltipTrigger>
+                          <TooltipContent>Taken right before a database restore replaced the data</TooltipContent>
+                        </Tooltip>
+                      ) : null}
+                    </div>
                   </TableCell>
                   <TableCell className="whitespace-nowrap text-muted-foreground">
                     <Tooltip>
@@ -329,10 +379,20 @@ export function SnapshotsPanel({
                   </TableCell>
                   <TableCell>
                     <div className="flex justify-end gap-1.5">
-                      <Button variant="outline" size="sm" onClick={() => setRestoring(s)}>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => (snapshotEngine(s) ? setRestoringDb(s) : setRestoring(s))}
+                      >
                         <FolderInput />
                         Restore
                       </Button>
+                      {snapshotEngine(s) ? null : (
+                        <Button variant="ghost" size="sm" onClick={() => setBrowsing(s)}>
+                          <FolderSearch />
+                          Browse
+                        </Button>
+                      )}
                       <Button
                         variant="ghost"
                         size="sm"
@@ -368,6 +428,25 @@ export function SnapshotsPanel({
           snapshot={restoring}
           repositoryId={repositoryId}
           defaultTarget={defaultRestoreTarget}
+          stay={stay}
+        />
+      ) : null}
+      {restoringDb ? (
+        <DbRestoreDialog
+          open={restoringDb !== null}
+          onOpenChange={(open) => !open && setRestoringDb(null)}
+          snapshot={restoringDb}
+          repositoryId={repositoryId}
+          defaultSource={databaseSource}
+          stay={stay}
+        />
+      ) : null}
+      {browsing ? (
+        <SnapshotBrowser
+          open={browsing !== null}
+          onOpenChange={(open) => !open && setBrowsing(null)}
+          snapshot={browsing}
+          repositoryId={repositoryId}
           stay={stay}
         />
       ) : null}

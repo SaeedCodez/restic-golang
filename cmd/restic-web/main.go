@@ -8,11 +8,14 @@ package main
 import (
 	"context"
 	"embed"
+	"errors"
 	"flag"
 	"io/fs"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"restic-web/internal/core"
@@ -99,8 +102,28 @@ func main() {
 	}
 	log.Printf("Open http://%s in your browser.", *addr)
 
-	if err := httpServer.ListenAndServe(); err != nil {
+	// On SIGTERM (a redeploy) or Ctrl-C, stop the runs cleanly before exiting.
+	// Docker gives the container stop_grace_period (60s in docker-compose.yaml)
+	// before it kills it.
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+	shutdownDone := make(chan struct{})
+	go func() {
+		defer close(shutdownDone)
+		sig := <-sigs
+		log.Printf("%v: stopping runs before shutting down…", sig)
+		app.Sched.Stop()
+		if !app.Coord.Shutdown(50 * time.Second) {
+			log.Printf("some runs did not finish in time; they are marked interrupted on the next start")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = httpServer.Shutdown(ctx)
+	}()
+
+	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Printf("server stopped: %v", err)
 		os.Exit(1)
 	}
+	<-shutdownDone
 }

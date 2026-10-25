@@ -294,6 +294,152 @@ func (s *FolderStore) Delete(id string) error {
 	return nil
 }
 
+// ---- databases -------------------------------------------------------------
+
+type DatabaseStore struct {
+	Pool *pgxpool.Pool
+}
+
+func newDatabaseStore(pool *pgxpool.Pool) *DatabaseStore { return &DatabaseStore{Pool: pool} }
+
+const databaseCols = `id, name, created_at, updated_at, engine, container, owner_kind, owner_uuid, owner_service, database_name`
+
+func scanDatabase(row interface{ Scan(dest ...any) error }) (Database, error) {
+	var d Database
+	var kind, uuid, service *string
+	err := row.Scan(&d.ID, &d.Name, &d.CreatedAt, &d.UpdatedAt, &d.Engine, &d.Container, &kind, &uuid, &service, &d.DatabaseName)
+	if err != nil {
+		return Database{}, err
+	}
+	for _, f := range []struct {
+		src *string
+		dst *string
+	}{{kind, &d.OwnerKind}, {uuid, &d.OwnerUUID}, {service, &d.OwnerService}} {
+		if f.src != nil {
+			*f.dst = *f.src
+		}
+	}
+	return d, nil
+}
+
+func (s *DatabaseStore) List() []Database {
+	ctx, cancel := dbCtx()
+	defer cancel()
+	rows, err := s.Pool.Query(ctx, `SELECT `+databaseCols+` FROM databases ORDER BY LOWER(name), id`)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []Database
+	for rows.Next() {
+		d, err := scanDatabase(rows)
+		if err != nil {
+			return out
+		}
+		out = append(out, d)
+	}
+	return out
+}
+
+func (s *DatabaseStore) Get(id string) (Database, bool) {
+	ctx, cancel := dbCtx()
+	defer cancel()
+	d, err := scanDatabase(s.Pool.QueryRow(ctx, `SELECT `+databaseCols+` FROM databases WHERE id = $1`, id))
+	if err != nil {
+		return Database{}, false
+	}
+	return d, true
+}
+
+func (s *DatabaseStore) Exists(id string) bool {
+	_, ok := s.Get(id)
+	return ok
+}
+
+func (s *DatabaseStore) Count() int {
+	return tableCount(s.Pool, "databases")
+}
+
+func (s *DatabaseStore) Create(item Database) (Database, error) {
+	var zero Database
+	name, err := requireUniqueName(s.Pool, "databases", "database source", item.Name, "")
+	if err != nil {
+		return zero, err
+	}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	item.ID = newID()
+	item.Name = name
+	item.CreatedAt = now
+	item.UpdatedAt = now
+	ctx, cancel := dbCtx()
+	defer cancel()
+	_, err = s.Pool.Exec(ctx, `INSERT INTO databases (`+databaseCols+`) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+		item.ID, item.Name, item.CreatedAt, item.UpdatedAt, item.Engine, item.Container,
+		emptyToNil(item.OwnerKind), emptyToNil(item.OwnerUUID), emptyToNil(item.OwnerService), item.DatabaseName)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return zero, conflictf("a database source named %q already exists", name)
+		}
+		return zero, err
+	}
+	return item, nil
+}
+
+func (s *DatabaseStore) Update(id string, item Database) (Database, error) {
+	var zero Database
+	prev, ok := s.Get(id)
+	if !ok {
+		return zero, notFoundf("database source not found")
+	}
+	name, err := requireUniqueName(s.Pool, "databases", "database source", item.Name, id)
+	if err != nil {
+		return zero, err
+	}
+	item.ID = id
+	item.Name = name
+	item.CreatedAt = prev.CreatedAt
+	item.UpdatedAt = time.Now().UTC().Truncate(time.Microsecond)
+	ctx, cancel := dbCtx()
+	defer cancel()
+	tag, err := s.Pool.Exec(ctx, `UPDATE databases SET name=$2, updated_at=$3, engine=$4, container=$5,
+		owner_kind=$6, owner_uuid=$7, owner_service=$8, database_name=$9 WHERE id=$1`,
+		item.ID, item.Name, item.UpdatedAt, item.Engine, item.Container,
+		emptyToNil(item.OwnerKind), emptyToNil(item.OwnerUUID), emptyToNil(item.OwnerService), item.DatabaseName)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return zero, conflictf("a database source named %q already exists", name)
+		}
+		return zero, err
+	}
+	if tag.RowsAffected() == 0 {
+		return zero, notFoundf("database source not found")
+	}
+	return item, nil
+}
+
+// SetContainer records the name a source's container was last found under.
+func (s *DatabaseStore) SetContainer(id, container string) {
+	ctx, cancel := dbCtx()
+	defer cancel()
+	_, _ = s.Pool.Exec(ctx, `UPDATE databases SET container=$2 WHERE id=$1`, id, container)
+}
+
+func (s *DatabaseStore) Delete(id string) error {
+	ctx, cancel := dbCtx()
+	defer cancel()
+	tag, err := s.Pool.Exec(ctx, `DELETE FROM databases WHERE id = $1`, id)
+	if err != nil {
+		if isFKViolation(err) {
+			return conflictf("this database source is still used by one or more jobs")
+		}
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return notFoundf("database source not found")
+	}
+	return nil
+}
+
 // ---- jobs ------------------------------------------------------------------
 
 type JobStore struct {
@@ -302,15 +448,22 @@ type JobStore struct {
 
 func newJobStore(pool *pgxpool.Pool) *JobStore { return &JobStore{Pool: pool} }
 
-const jobCols = `id, name, created_at, updated_at, folder_id, repository_id, schedule, retention`
+const jobCols = `id, name, created_at, updated_at, folder_id, repository_id, schedule, retention, database_id`
 
 func scanJob(row interface{ Scan(dest ...any) error }) (Job, error) {
 	var j Job
 	var sched []byte
 	var ret []byte
-	err := row.Scan(&j.ID, &j.Name, &j.CreatedAt, &j.UpdatedAt, &j.FolderID, &j.RepositoryID, &sched, &ret)
+	var folderID, databaseID *string
+	err := row.Scan(&j.ID, &j.Name, &j.CreatedAt, &j.UpdatedAt, &folderID, &j.RepositoryID, &sched, &ret, &databaseID)
 	if err != nil {
 		return Job{}, err
+	}
+	if folderID != nil {
+		j.FolderID = *folderID
+	}
+	if databaseID != nil {
+		j.DatabaseID = *databaseID
 	}
 	if len(sched) > 0 {
 		var s JobSchedule
@@ -381,15 +534,15 @@ func (s *JobStore) Create(item Job) (Job, error) {
 	if item.Retention != nil {
 		_ = item.Retention.Validate() // normalize preset counts when valid/disabled
 	}
-	_, err = s.Pool.Exec(ctx, `INSERT INTO jobs (`+jobCols+`) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-		item.ID, item.Name, item.CreatedAt, item.UpdatedAt, item.FolderID, item.RepositoryID,
-		scheduleJSON(item.Schedule), retentionJSON(item.Retention))
+	_, err = s.Pool.Exec(ctx, `INSERT INTO jobs (`+jobCols+`) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+		item.ID, item.Name, item.CreatedAt, item.UpdatedAt, emptyToNil(item.FolderID), item.RepositoryID,
+		scheduleJSON(item.Schedule), retentionJSON(item.Retention), emptyToNil(item.DatabaseID))
 	if err != nil {
 		if isUniqueViolation(err) {
 			return zero, conflictf("a job named %q already exists", name)
 		}
 		if isFKViolation(err) {
-			return zero, validf("the chosen folder or repository no longer exists")
+			return zero, validf("the chosen source or repository no longer exists")
 		}
 		return zero, err
 	}
@@ -416,15 +569,15 @@ func (s *JobStore) Update(id string, item Job) (Job, error) {
 	ctx, cancel := dbCtx()
 	defer cancel()
 	tag, err := s.Pool.Exec(ctx, `UPDATE jobs SET
-		name=$2, updated_at=$3, folder_id=$4, repository_id=$5, schedule=$6, retention=$7 WHERE id=$1`,
-		item.ID, item.Name, item.UpdatedAt, item.FolderID, item.RepositoryID,
-		scheduleJSON(item.Schedule), retentionJSON(item.Retention))
+		name=$2, updated_at=$3, folder_id=$4, repository_id=$5, schedule=$6, retention=$7, database_id=$8 WHERE id=$1`,
+		item.ID, item.Name, item.UpdatedAt, emptyToNil(item.FolderID), item.RepositoryID,
+		scheduleJSON(item.Schedule), retentionJSON(item.Retention), emptyToNil(item.DatabaseID))
 	if err != nil {
 		if isUniqueViolation(err) {
 			return zero, conflictf("a job named %q already exists", name)
 		}
 		if isFKViolation(err) {
-			return zero, validf("the chosen folder or repository no longer exists")
+			return zero, validf("the chosen source or repository no longer exists")
 		}
 		return zero, err
 	}

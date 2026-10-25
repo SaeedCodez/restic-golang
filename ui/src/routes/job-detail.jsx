@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
-import { ArrowRight, Play, Trash2 } from "lucide-react";
+import { ArrowRight, Database, Play, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import {
@@ -118,8 +118,9 @@ export default function JobDetail() {
         title={job.name}
         description={
           <span className="flex items-center gap-2 font-mono text-xs">
-            <span className="min-w-0 flex-1 truncate" title={job.folderPath}>
-              {job.folderPath || job.folderName || "?"}
+            {job.sourceKind === "database" ? <Database className="size-3 shrink-0 opacity-60" /> : null}
+            <span className="min-w-0 flex-1 truncate" title={job.sourceLabel}>
+              {job.sourceLabel || job.folderPath || job.folderName || "?"}
             </span>
             <ArrowRight className="size-3 shrink-0 opacity-60" />
             <span className="shrink-0">{job.repoName || "?"}</span>
@@ -214,7 +215,12 @@ export default function JobDetail() {
           load={loadSnapshots}
           repositoryId={job.repositoryId}
           reloadKey={runsVersion}
-          defaultRestoreTarget={job.folderPath}
+          defaultRestoreTarget={job.sourceKind === "database" ? undefined : job.folderPath}
+          databaseSource={
+            job.sourceKind === "database"
+              ? { id: job.databaseId, name: job.databaseName, database: job.database, engine: job.engine }
+              : undefined
+          }
           jobId={id}
           stay
         />

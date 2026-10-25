@@ -9,9 +9,9 @@ import (
 )
 
 // This file is the single home for the app's persisted domain types. The app is
-// built around four user-managed entities — Repository, Folder, Job — plus a Run
-// (one execution of any long-running operation) and its append-only LogLine
-// stream. Runs and log lines are owned by the RunStore; the three entities are
+// built around four user-managed entities — Repository, Folder, Database, Job —
+// plus a Run (one execution of any long-running operation) and its append-only
+// LogLine stream. Runs and log lines are owned by the RunStore; the entities are
 // owned by Postgres-backed stores (see pg_entities.go).
 
 // Meta is the common identity/timestamp block embedded in every user-managed
@@ -145,6 +145,50 @@ func (f *Folder) Validate() error {
 		return errors.New("a folder path is required")
 	}
 	return nil
+}
+
+// ---- Database --------------------------------------------------------------
+
+// Database is a reusable, named database to back up: one database inside a
+// database server container. It is dumped and restored with the server's own
+// tools via docker exec, so no credentials are stored here.
+type Database struct {
+	Meta
+	Engine string `json:"engine"` // postgres | mysql | mariadb
+	// Container is the container's name when the source was saved. Coolify can
+	// recreate a container under a new name, so the owner fields below are what
+	// finds it again.
+	Container string `json:"container"`
+	// OwnerKind/OwnerUUID name the resource that runs the container (a Coolify
+	// application, service or database, or a compose project) and OwnerService
+	// the container's part in it.
+	OwnerKind    string `json:"ownerKind,omitempty"`
+	OwnerUUID    string `json:"ownerUuid,omitempty"`
+	OwnerService string `json:"ownerService,omitempty"`
+	// DatabaseName is the database inside the server.
+	DatabaseName string `json:"database"`
+}
+
+// Validate checks that the database source is usable.
+func (d *Database) Validate() error {
+	if strings.TrimSpace(d.Name) == "" {
+		return errors.New("a database source name is required")
+	}
+	if !validEngine(d.Engine) {
+		return errors.New(`engine must be "postgres", "mysql" or "mariadb"`)
+	}
+	if strings.TrimSpace(d.Container) == "" {
+		return errors.New("a database container is required")
+	}
+	if strings.TrimSpace(d.DatabaseName) == "" {
+		return errors.New("a database name is required")
+	}
+	return validateDBName(d.DatabaseName)
+}
+
+// Describe is a short label for the source, e.g. "MariaDB shop on shared-db".
+func (d *Database) Describe() string {
+	return engineLabel(d.Engine) + " " + d.DatabaseName + " on " + d.Container
 }
 
 // ---- Job -------------------------------------------------------------------
@@ -325,13 +369,15 @@ func (r *JobRetention) Describe() string {
 	return strings.Join(parts, ", ")
 }
 
-// Job is the core concept: a saved, named pairing of one Folder and one
-// Repository. It is the thing the user runs, views and returns to. An optional
-// Schedule makes the same job fire automatically while the process is running.
-// An optional Retention policy forgets old snapshots for this job after backups.
+// Job is the core concept: a saved, named pairing of one source — a Folder or a
+// Database — and one Repository. It is the thing the user runs, views and
+// returns to. An optional Schedule makes the same job fire automatically while
+// the process is running. An optional Retention policy forgets old snapshots
+// for this job after backups.
 type Job struct {
 	Meta
-	FolderID     string        `json:"folderId"`
+	FolderID     string        `json:"folderId,omitempty"`
+	DatabaseID   string        `json:"databaseId,omitempty"`
 	RepositoryID string        `json:"repositoryId"`
 	Schedule     *JobSchedule  `json:"schedule,omitempty"`
 	Retention    *JobRetention `json:"retention,omitempty"`
@@ -343,14 +389,23 @@ type Job struct {
 // the job's immutable id, so it is stable across renames without being stored.
 func (j *Job) ResticTag() string { return "resticweb-job:" + j.ID }
 
-// Validate checks that the job names a folder and a repository, and that any
-// attached schedule or retention policy is well-formed.
+// IsDatabase reports whether the job backs up a database rather than a folder.
+func (j *Job) IsDatabase() bool { return j.DatabaseID != "" }
+
+// Validate checks that the job names exactly one source (a folder or a
+// database) and a repository, and that any attached schedule or retention
+// policy is well-formed.
 func (j *Job) Validate() error {
 	if strings.TrimSpace(j.Name) == "" {
 		return errors.New("a job name is required")
 	}
-	if strings.TrimSpace(j.FolderID) == "" {
-		return errors.New("please choose a backup folder for this job")
+	j.FolderID = strings.TrimSpace(j.FolderID)
+	j.DatabaseID = strings.TrimSpace(j.DatabaseID)
+	if j.FolderID == "" && j.DatabaseID == "" {
+		return errors.New("please choose a backup folder or database for this job")
+	}
+	if j.FolderID != "" && j.DatabaseID != "" {
+		return errors.New("a job backs up either a folder or a database, not both")
 	}
 	if strings.TrimSpace(j.RepositoryID) == "" {
 		return errors.New("please choose a storage repository for this job")
@@ -490,6 +545,8 @@ const (
 	KindRetention RunKind = "retention"
 	KindForget    RunKind = "forget"
 	KindCheck     RunKind = "check"
+	// KindRestoreDB replaces a database with a dump from a snapshot.
+	KindRestoreDB RunKind = "restore_db"
 )
 
 // TriggerAfterBackup marks a retention run started after a successful backup.

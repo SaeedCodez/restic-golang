@@ -65,8 +65,14 @@ func repoViewOf(repo core.Repository) repoView {
 // jobView enriches a job with display fields for list/get output.
 type jobView struct {
 	core.Job
+	SourceKind    string    `json:"sourceKind"`
+	SourceLabel   string    `json:"sourceLabel"`
 	FolderName    string    `json:"folderName"`
 	FolderPath    string    `json:"folderPath"`
+	DatabaseName  string    `json:"databaseName,omitempty"`
+	Database      string    `json:"database,omitempty"`
+	Engine        string    `json:"engine,omitempty"`
+	Container     string    `json:"container,omitempty"`
 	RepoName      string    `json:"repoName"`
 	Tag           string    `json:"tag"`
 	LastRun       *core.Run `json:"lastRun,omitempty"`
@@ -80,9 +86,21 @@ func (c *CLI) viewOf(job core.Job) jobView {
 		Tag:           job.ResticTag(),
 		ScheduleState: core.ScheduleStateOff,
 	}
-	if f, ok := c.app.Folders.Get(job.FolderID); ok {
+	src := c.app.SourceOf(job)
+	v.SourceKind = core.SourceFolder
+	if job.IsDatabase() {
+		v.SourceKind = core.SourceDatabase
+	}
+	v.SourceLabel = src.Label()
+	if f := src.Folder; f != nil {
 		v.FolderName = f.Name
 		v.FolderPath = f.Path
+	}
+	if d := src.Database; d != nil {
+		v.DatabaseName = d.Name
+		v.Database = d.DatabaseName
+		v.Engine = d.Engine
+		v.Container = d.Container
 	}
 	if repo, ok := c.app.Repos.Get(job.RepositoryID); ok {
 		v.RepoName = repo.Name

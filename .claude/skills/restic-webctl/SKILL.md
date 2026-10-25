@@ -1,6 +1,6 @@
 ---
 name: restic-webctl
-description: Operate restic-web backups from a shell with the restic-webctl CLI — check backup health, verify repository integrity, run backups, list snapshots, restore or download snapshots, inspect run logs, and apply retention. Use when asked to check, verify, run, restore, or troubleshoot backups managed by restic-web, locally or inside its Docker/Coolify container.
+description: Operate restic-web backups from a shell with the restic-webctl CLI — check backup health, verify repository integrity, run backups, back up Coolify sites and databases, list and browse snapshots, restore files or databases, download snapshots, inspect run logs, and apply retention. Use when asked to check, verify, run, restore, or troubleshoot backups managed by restic-web, locally or inside its Docker/Coolify container.
 ---
 
 # Operating restic-web with restic-webctl
@@ -33,8 +33,10 @@ container already has it. `status` must report restic as available.
   run to finish. Do not background or kill them: that orphans the run and blocks
   the repository.
 - **Destructive — ask the user first, naming the exact target:** `repo forget`,
-  `repo reset`, `job forget`, `job delete`, `repo delete`, `folder delete`, and
-  any restore whose `--target` already holds data.
+  `repo reset`, `job forget`, `job delete`, `repo delete`, `folder delete`,
+  `database delete`, `repo restore-db` without `--into` (drops the live
+  database), `repo restore --stop-containers` (takes a site down), and any
+  restore whose `--target` already holds data.
 - Never echo repository passwords or S3 keys back to the user.
 
 ## 3. Workflows
@@ -102,6 +104,44 @@ path and snapshot. To give the user a zip instead:
 ```sh
 restic-webctl --json repo download <repo> --snapshot <id>
 restic-webctl run download <runId> -o snapshot.zip
+```
+
+### Back up a Coolify site or database
+
+Needs the Docker socket in the app container (`docker status` says so).
+
+```sh
+restic-webctl --json docker resources            # find the site: domains, volumes, databases
+restic-webctl --json folder create --name shop-files --path /docker-volumes/<volume>/_data
+restic-webctl --json database create --name shop-db --container <db-container> --db <database>
+restic-webctl --json job create --name shop-db --db-source shop-db --repo <repo> --schedule-kind daily --schedule-at 02:00
+restic-webctl --json job run shop-db --wait
+```
+
+A volume's `path` in `docker resources` is the folder path to use. For a site
+on a shared database server, `linkedDatabases` names the container and
+database it uses; `docker databases <container>` lists what a server holds.
+
+### Restore a database
+
+Database snapshots carry the tag `resticweb-db:<engine>` and hold one file,
+`/<database>.sql`. Safe default: restore into a new database next to the live
+one, then let the user check it.
+
+```sh
+restic-webctl --json repo restore-db <repo> --snapshot <id> --db-source <source> --into <database>_restored
+```
+
+Only replace the live database (no `--into`) after the user explicitly
+confirms that database and snapshot. That run first takes a safety snapshot
+(tag `resticweb-prerestore`, id in the run's `params.safetySnapshot`) and puts
+it back if the import fails.
+
+### Restore some files
+
+```sh
+restic-webctl --json repo files <repo> --snapshot <id> --path /docker-volumes/<volume>/_data/wp-content
+restic-webctl --json repo restore <repo> --snapshot <id> --target /app/data/restore-<date> --include <path> [--include <path2>]
 ```
 
 ### Read a run's log

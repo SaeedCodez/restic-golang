@@ -42,3 +42,13 @@ func parseCSVInts(s string) ([]int, error) {
 	}
 	return out, nil
 }
+
+// stringList is a repeatable string flag (--include a --include b).
+type stringList []string
+
+func (s *stringList) String() string { return strings.Join(*s, ",") }
+
+func (s *stringList) Set(v string) error {
+	*s = append(*s, v)
+	return nil
+}

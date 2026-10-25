@@ -1,7 +1,11 @@
 package core
 
 import (
+	"bytes"
 	"context"
+	"fmt"
+	"io"
+	"strings"
 	"sync"
 )
 
@@ -78,12 +82,30 @@ type fakeRunner struct {
 	// streamFn drives Backup/Restore/Forget. If nil, the op succeeds immediately.
 	streamFn func(ctx context.Context, kind RunKind, sink RunSink) (int, error)
 
+	// dumpData maps "snapshotID file" to the bytes Dump streams. BackupStdin
+	// stores what it was given here too, under the snapshot id it reports, so
+	// a restore can read a safety backup back.
+	dumpData map[string][]byte
+	// dumpCode is the exit code Dump returns after streaming.
+	dumpCode int
+	lsNodes  []LsNode
+	lsErr    error
+
 	mu              sync.Mutex
 	snapTags        []string // tags passed to Snapshots, for assertions
 	initCount       int      // number of Init calls, for assertions
 	forgetCalls     []forgetCall
 	forgetSnapCalls []forgetSnapshotsCall
 	checkCalls      []string
+	stdinCalls      []stdinCall
+	dumpCalls       []string
+	lsCalls         int
+}
+
+type stdinCall struct {
+	Filename string
+	Tags     []string
+	Data     string
 }
 
 type forgetCall struct {
@@ -229,6 +251,201 @@ func (f *fakeRunner) recordedForgetSnapshots() []forgetSnapshotsCall {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]forgetSnapshotsCall(nil), f.forgetSnapCalls...)
+}
+
+func (f *fakeRunner) BackupStdin(ctx context.Context, repo *Repository, filename string, tags []string, produce func(w io.Writer) error, sink RunSink) (int, error) {
+	sink.PID(4242, "faketoken")
+	var buf bytes.Buffer
+	if err := produce(&buf); err != nil {
+		return resticExitInterrupted, err
+	}
+	f.mu.Lock()
+	f.stdinCalls = append(f.stdinCalls, stdinCall{Filename: filename, Tags: append([]string(nil), tags...), Data: buf.String()})
+	id := fmt.Sprintf("stdinsnap%02d", len(f.stdinCalls))
+	if f.dumpData == nil {
+		f.dumpData = map[string][]byte{}
+	}
+	f.dumpData[id+" /"+filename] = buf.Bytes()
+	f.mu.Unlock()
+	if f.streamFn != nil {
+		code, err := f.streamFn(ctx, KindBackup, sink)
+		if code != 0 || err != nil {
+			return code, err
+		}
+	}
+	sink.Summary(Summary{SnapshotID: id, DataAdded: int64(buf.Len()), TotalBytesProcessed: int64(buf.Len())})
+	return 0, nil
+}
+
+func (f *fakeRunner) recordedStdinBackups() []stdinCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]stdinCall(nil), f.stdinCalls...)
+}
+
+func (f *fakeRunner) Dump(ctx context.Context, repo *Repository, snapshotID, file string, consume func(r io.Reader) error, sink RunSink) (int, error) {
+	sink.PID(4242, "faketoken")
+	f.mu.Lock()
+	f.dumpCalls = append(f.dumpCalls, snapshotID+" "+file)
+	data := f.dumpData[snapshotID+" "+file]
+	code := f.dumpCode
+	f.mu.Unlock()
+	if err := consume(bytes.NewReader(data)); err != nil {
+		return 0, err
+	}
+	return code, nil
+}
+
+func (f *fakeRunner) recordedDumps() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.dumpCalls...)
+}
+
+func (f *fakeRunner) List(ctx context.Context, repo *Repository, snapshotID string) ([]LsNode, error) {
+	f.mu.Lock()
+	f.lsCalls++
+	f.mu.Unlock()
+	return f.lsNodes, f.lsErr
+}
+
+// fakeDocker is a scriptable Docker Engine. Exec delegates to execFn with the
+// command's whole stdin; without one, every command succeeds silently.
+type fakeDocker struct {
+	pingErr    error
+	containers []Container
+	execFn     func(c Container, cmd []string, stdin string) (stdout, stderr string, code int)
+
+	mu        sync.Mutex
+	execCalls []execCall
+	stopped   []string
+	started   []string
+}
+
+type execCall struct {
+	Container string
+	Kind      string // dbCmdKind of the command
+	Args      []string
+	Stdin     string
+}
+
+func (d *fakeDocker) Ping(ctx context.Context) error { return d.pingErr }
+
+func (d *fakeDocker) Containers(ctx context.Context) ([]Container, error) {
+	if d.pingErr != nil {
+		return nil, d.pingErr
+	}
+	out := make([]Container, len(d.containers))
+	for i, c := range d.containers {
+		c.Env, c.Aliases = nil, nil // like the list endpoint
+		out[i] = c
+	}
+	return out, nil
+}
+
+func (d *fakeDocker) find(id string) (Container, bool) {
+	for _, c := range d.containers {
+		if c.ID == id || c.Name == id || (len(id) >= 12 && strings.HasPrefix(c.ID, id)) {
+			return c, true
+		}
+	}
+	return Container{}, false
+}
+
+func (d *fakeDocker) Inspect(ctx context.Context, id string) (Container, error) {
+	if c, ok := d.find(id); ok {
+		return c, nil
+	}
+	return Container{}, &dockerAPIError{Status: 404, Message: "No such container: " + id}
+}
+
+func (d *fakeDocker) Exec(ctx context.Context, id string, cmd []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	c, ok := d.find(id)
+	if !ok {
+		return -1, &dockerAPIError{Status: 404, Message: "No such container: " + id}
+	}
+	if len(cmd) > 2 && cmd[0] == "env" {
+		cmd = cmd[2:] // the token dbCommand prefixes
+	}
+	var in []byte
+	if stdin != nil {
+		b, err := io.ReadAll(stdin)
+		if err != nil {
+			return -1, err
+		}
+		in = b
+	}
+	var args []string
+	if len(cmd) > 4 {
+		args = cmd[4:]
+	}
+	d.mu.Lock()
+	d.execCalls = append(d.execCalls, execCall{Container: c.Name, Kind: dbCmdKind(cmd), Args: args, Stdin: string(in)})
+	d.mu.Unlock()
+	if d.execFn == nil {
+		return 0, nil
+	}
+	out, errOut, code := d.execFn(c, cmd, string(in))
+	if stdout != nil {
+		if _, err := io.WriteString(stdout, out); err != nil {
+			return -1, err
+		}
+	}
+	if stderr != nil {
+		_, _ = io.WriteString(stderr, errOut)
+	}
+	return code, nil
+}
+
+func (d *fakeDocker) Stop(ctx context.Context, id string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.stopped = append(d.stopped, id)
+	return nil
+}
+
+func (d *fakeDocker) Start(ctx context.Context, id string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.started = append(d.started, id)
+	return nil
+}
+
+func (d *fakeDocker) recordedExecs() []execCall {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]execCall(nil), d.execCalls...)
+}
+
+// dbCmdKind names which database command a dbengine.go builder produced.
+func dbCmdKind(cmd []string) string {
+	if len(cmd) < 3 {
+		return "?"
+	}
+	script := cmd[2]
+	switch {
+	case strings.Contains(script, "/proc/[0-9]*"):
+		return "kill"
+	case strings.Contains(script, "pg_dump") || strings.Contains(script, `exec "$DUMP"`):
+		return "dump"
+	case strings.Contains(script, "SHOW DATABASES") || strings.Contains(script, "FROM pg_database WHERE NOT datistemplate"):
+		return "list"
+	case strings.Contains(script, "pg_db_role_setting"):
+		return "props"
+	case strings.Contains(script, "RENAME TO"):
+		return "swap"
+	case strings.Contains(script, "ALLOW_CONNECTIONS true"):
+		return "allow"
+	case strings.Contains(script, "pg_get_userbyid") || (len(cmd) > 4 && strings.Contains(cmd[4], "information_schema.SCHEMATA")):
+		return "meta"
+	case strings.Contains(script, "DROP DATABASE") || (len(cmd) > 5 && strings.Contains(cmd[5], "DROP DATABASE")):
+		return "drop"
+	case strings.Contains(script, "CREATE DATABASE") || (len(cmd) > 4 && strings.HasPrefix(cmd[4], "CREATE DATABASE")):
+		return "create"
+	case strings.Contains(script, "--single-transaction >/dev/null") || strings.Contains(script, "--default-character-set=utf8mb4 \"$1\""):
+		return "import"
+	}
+	return "?"
 }
 
 // gatedStream is a streamFn that emits an initial log + progress line, signals

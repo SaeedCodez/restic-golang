@@ -173,6 +173,41 @@ restic-webctl folder update <id|name> [--name N] [--path P]
 restic-webctl folder delete <id|name>
 ```
 
+### `database`
+
+A database source is one database inside a PostgreSQL, MySQL or MariaDB
+container. It is dumped and restored inside that container (`docker exec`)
+with the credentials from the container's own environment, so the app stores
+no database password. Needs the Docker socket.
+
+```sh
+restic-webctl database list
+restic-webctl database get <id|name>
+restic-webctl database create --name NAME --container CONTAINER --db DB [--engine postgres|mysql|mariadb]
+restic-webctl database update <id|name> [--name N] [--db DB]
+restic-webctl database delete <id|name>
+```
+
+Without `--engine`, `create` inspects the container: the engine comes from its
+image (or Coolify's label) and the owning Coolify resource is recorded, so the
+source still finds the container after Coolify recreates it. The global
+`--database` flag is the Postgres URL of this app, so the database name is
+`--db` and a job's database source is `--db-source`.
+
+### `docker` (alias `coolify`)
+
+```sh
+restic-webctl docker status                 # socket reachable? Coolify host?
+restic-webctl docker resources              # sites, volumes, databases; * = backed up
+restic-webctl docker databases <container>  # databases inside a database container
+```
+
+`--json docker resources` returns, per resource: `key` (`service:<uuid>`,
+`application:<uuid>`, `database:<uuid>`), `name`, `project`, `domains`,
+`volumes[]` (`path` is where this app reaches it, `jobs` what backs it up),
+`databases[]` (database containers) and `linkedDatabases[]` (databases the
+site's environment points at, e.g. WordPress on a shared MariaDB).
+
 ### `repo`
 
 ```sh
@@ -194,7 +229,21 @@ restic-webctl repo restore <id|name> --snapshot ID --target PATH [--wait]
 # unless a filter is set). The run first reads the snapshot to decide this
 # ("Reading snapshot … to plan the restore" in its log); if that read fails,
 # the restore fails rather than guessing.
-restic-webctl repo download <id|name> --snapshot ID [--wait]
+restic-webctl repo restore <id|name> --snapshot ID --target PATH --include P [--include P2 …] [--wait]
+# --include restores only those snapshot paths (files or folders). In place,
+# only they are replaced; files inside a selected folder that are not in the
+# snapshot are deleted, everything else is left alone.
+restic-webctl repo restore <id|name> --snapshot ID --target PATH --stop-containers [--wait]
+# Stops the running containers that use PATH (a site's volume) and starts them
+# again afterwards, whatever the outcome.
+restic-webctl repo files <id|name> --snapshot ID [--path DIR]   # list one folder of a snapshot
+restic-webctl repo download <id|name> --snapshot ID [--include P …] [--wait]
+restic-webctl repo restore-db <id|name> --snapshot ID --db-source ID|NAME [--into NAME] [--no-safety-backup] [--wait]
+# Replaces the database with the dump in the snapshot (kind restore_db): it is
+# dropped and recreated (owner and character set kept), then imported. First a
+# safety snapshot of the current database is taken (tag resticweb-prerestore);
+# if the import fails it is put back automatically. --into NAME restores into
+# another database on the same server instead, leaving the live one alone.
 restic-webctl repo forget <id|name> --snapshot ID [--wait]
 restic-webctl repo reset <id|name> [--wait]
 ```
@@ -222,6 +271,7 @@ S3 create: `--endpoint URL --bucket NAME [--region R] --access-key K --secret-ke
 restic-webctl job list
 restic-webctl job get <id|name>
 restic-webctl job create --name NAME --folder ID|NAME --repo ID|NAME […]
+restic-webctl job create --name NAME --db-source ID|NAME --repo ID|NAME […]
 restic-webctl job update <id|name> […]
 restic-webctl job delete <id|name> [--forget]
 restic-webctl job run <id|name> [--wait] [--follow]
@@ -230,6 +280,10 @@ restic-webctl job forget <id|name> [--delete-job] [--wait] [--follow]
 restic-webctl job runs <id|name> [--limit N]
 restic-webctl job snapshots <id|name>
 ```
+
+A database job's backup dumps the database inside its container and stores it
+as one file, `<database>.sql`, tagged `resticweb-db:<engine>`. If the dump
+fails, no snapshot is saved and the run fails with the dump tool's message.
 
 `job delete` removes the job from the app and leaves restic snapshots in place.
 `job delete --forget` (or `job forget --delete-job`) forgets that job's tagged
@@ -286,3 +340,6 @@ For an agent that manages a server without this checkout, copy that folder to
 6. To verify backups, run `repo check <repo> --read-data-subset 10% --json`;
    a failed run means damage (or an unreachable repo) — read `run log <runId>`.
 7. Do not rely on web login cookies or `RESTIC_WEB_PASSWORD` for CLI ops.
+8. `repo restore-db` without `--into` drops the live database: get the user's
+   explicit confirmation naming the database first. To inspect a backup, use
+   `--into <name>_restored`.

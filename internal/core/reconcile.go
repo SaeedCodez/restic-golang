@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"log"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -34,9 +35,22 @@ func (a *App) Reconcile() {
 	// Download workspaces are ephemeral; drop any left by a previous session.
 	_ = os.RemoveAll(filepath.Join(a.DataDir, "downloads"))
 
-	repoIDs := a.Runs.reconcile(reapOrphan)
+	repoIDs, stopped := a.Runs.reconcile(reapOrphan)
 	if a.RetainRunsPerJob > 0 {
 		a.Runs.prune(a.RetainRunsPerJob)
+	}
+	// A restore that stopped a site and died before starting it again leaves
+	// the site down; start those containers again.
+	if len(stopped) > 0 {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			for _, id := range stopped {
+				if err := a.Docker.Start(ctx, id); err != nil {
+					log.Printf("reconcile: could not start container %s again: %v", shortID(id), err)
+				}
+			}
+		}()
 	}
 
 	if !a.Runner.Available() {

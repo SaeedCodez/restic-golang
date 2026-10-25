@@ -36,7 +36,7 @@ func (s *Server) Routes(static http.Handler) http.Handler {
 	// App-wide status.
 	mux.HandleFunc("GET /api/status", s.handleStatus)
 
-	// Entity management (repositories, folders, jobs).
+	// Entity management (repositories, folders, databases, jobs).
 	mux.HandleFunc("GET /api/repositories", s.handleRepoList)
 	mux.HandleFunc("POST /api/repositories", s.handleRepoCreate)
 	mux.HandleFunc("GET /api/repositories/{id}", s.handleRepoGet)
@@ -52,11 +52,27 @@ func (s *Server) Routes(static http.Handler) http.Handler {
 	mux.HandleFunc("POST /api/repositories/{id}/reset", s.handleRepoReset)
 	mux.HandleFunc("POST /api/repositories/{id}/check", s.handleRepoCheck)
 
+	mux.HandleFunc("POST /api/repositories/{id}/restore-db", s.handleRepoRestoreDatabase)
+	mux.HandleFunc("GET /api/repositories/{id}/snapshots/{sid}/ls", s.handleSnapshotLs)
+
 	mux.HandleFunc("GET /api/folders", s.handleFolderList)
 	mux.HandleFunc("POST /api/folders", s.handleFolderCreate)
 	mux.HandleFunc("GET /api/folders/{id}", s.handleFolderGet)
 	mux.HandleFunc("PUT /api/folders/{id}", s.handleFolderUpdate)
 	mux.HandleFunc("DELETE /api/folders/{id}", s.handleFolderDelete)
+
+	mux.HandleFunc("GET /api/databases", s.handleDatabaseList)
+	mux.HandleFunc("POST /api/databases", s.handleDatabaseCreate)
+	mux.HandleFunc("GET /api/databases/{id}", s.handleDatabaseGet)
+	mux.HandleFunc("PUT /api/databases/{id}", s.handleDatabaseUpdate)
+	mux.HandleFunc("DELETE /api/databases/{id}", s.handleDatabaseDelete)
+
+	// Docker / Coolify discovery: sites, volumes and databases on this host.
+	mux.HandleFunc("GET /api/docker/status", s.handleDockerStatus)
+	mux.HandleFunc("GET /api/docker/resources", s.handleDockerResources)
+	mux.HandleFunc("GET /api/docker/containers/{id}/databases", s.handleDockerContainerDatabases)
+	mux.HandleFunc("GET /api/docker/containers-using", s.handleDockerContainersUsing)
+	mux.HandleFunc("POST /api/docker/jobs", s.handleDockerJobCreate)
 
 	mux.HandleFunc("GET /api/jobs", s.handleJobList)
 	mux.HandleFunc("POST /api/jobs", s.handleJobCreate)

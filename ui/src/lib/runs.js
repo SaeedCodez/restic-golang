@@ -48,6 +48,7 @@ export const KIND_LABEL = {
   retention: "Retention",
   forget: "Forget",
   check: "Check",
+  restore_db: "Database restore",
 };
 
 export function statusLabel(status) {

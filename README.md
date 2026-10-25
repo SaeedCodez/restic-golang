@@ -7,9 +7,13 @@ built around three things you create and manage:
 
 - **Storage repositories** — several named places to store backups, added and
   edited in the app.
-- **Backup folders** — named, reusable source folders.
-- **Backup jobs** — the core concept: a saved, named pairing of one folder and
+- **Backup sources** — named, reusable source folders, and databases
+  (PostgreSQL, MySQL, MariaDB) dumped from their containers.
+- **Backup jobs** — the core concept: a saved, named pairing of one source and
   one repository. A job is the thing you run, look at, and come back to.
+
+On [Coolify](#coolify), the app lists the server's sites and databases and
+backs any of them up in one click, with no change to the deployment.
 
 ![Dashboard, the home screen: inventory counts, live runs, and upcoming schedules](docs/screenshots/dashboard.png)
 
@@ -92,6 +96,62 @@ docker compose up --build
 Open http://127.0.0.1:8080. Default DB user/password/db are all `restic`
 (override with `SERVICE_PASSWORD_DB` if you like). Coolify uses the same
 `docker-compose.yaml` with its Compose build pack (no host port bind; Traefik proxies).
+
+### Coolify
+
+Deploy this repository once in Coolify as a **Docker Compose** application
+(`docker-compose.yaml`, set a domain on the `app` service). The compose file
+mounts what the app needs to back up anything on that server:
+
+- `/var/lib/docker/volumes` → `/docker-volumes`, every named volume (site files);
+- `/data/coolify/applications` and `/data/coolify/services`, the storages
+  Coolify keeps as host directories;
+- `/var/run/docker.sock`, so the app can see Coolify's containers and run
+  database dumps inside them.
+
+After that, the **Coolify** page lists every application, service and
+database on the server, grouped by Coolify project, with their domains:
+
+- **Site files**: each volume a site uses (e.g. `/var/www/html`) has a
+  **Back up** button that creates the folder and a daily job in one step.
+- **Databases**: each PostgreSQL, MySQL or MariaDB container lists its
+  databases; a site that points at a database (e.g. WordPress
+  `WORDPRESS_DB_HOST` / `WORDPRESS_DB_NAME`, also on a shared database server)
+  shows it as "Uses database …" with its own **Back up** button.
+- What is already backed up says so, and by which job.
+
+New sites and databases appear there as soon as Coolify starts them: nothing in
+the deployment changes. Containers are matched by their Coolify labels, so a
+backup keeps working after Coolify recreates a container under a new name.
+
+**Database backups** run the engine's own dump tool inside the database
+container (`pg_dump`, `mariadb-dump` or `mysqldump`) with the credentials from
+that container's environment, and stream the dump into
+`restic backup --stdin`. The app never reads or stores database passwords. A
+dump that fails leaves no snapshot. Each dump is one file, `<database>.sql`, so
+it deduplicates like any other backup and downloads as a zip.
+
+**Restoring a database** replaces it with the dump, so it is exactly as it was
+when backed up. First, a safety snapshot of the current database is taken
+(tagged `resticweb-prerestore`). PostgreSQL imports into a temporary database
+and swaps it in only once the whole dump went in (owner, encoding, locale,
+database settings, privileges and comment carried over), so a failed or stopped
+restore leaves the live database untouched. MySQL and MariaDB have no database
+rename: the database is dropped (its sessions ended), created with the same
+character set and imported, and if that fails the safety snapshot is put back
+automatically. A dump restores only into the engine it came from. Restore **as
+a new database** (e.g. `shop_restored`) to look inside a backup without
+touching the live one. Backups and restores of the same database never run at
+the same time, even to different repositories.
+
+**Restoring files**: restore a whole volume in place (optionally stopping the
+site's containers while it runs), or **Browse** a snapshot and restore or
+download just some files and folders; in place, only the selection is replaced.
+
+Security: the Docker socket gives this app root-equivalent control of the
+server. Keep the app behind its login password, and only on a domain you trust.
+Without the socket the app still works; the Coolify page and database backups
+are just unavailable.
 
 ### Native Go (local Postgres)
 
@@ -252,6 +312,12 @@ server.go          routing + shared HTTP helpers
 handlers_*.go      HTTP handlers: entities, runs, repo ops, SSE, status
 sysproc_*.go       process-group setup / signalling (unix, windows)
 reap_*.go          orphan identification (linux via /proc; no-op elsewhere)
+docker.go          Docker Engine API client (unix socket, exec with stdin/stdout)
+discovery.go       Coolify/Docker resources, volumes, databases, path mapping
+dbengine.go        dump / drop / create / import commands per database engine
+coordinator_db.go  database backup and restore runs (safety snapshot, rollback)
+runner_stdio.go    restic backup --stdin, dump and ls
+snapshot_ls.go     snapshot file tree for the browser
 cmd/restic-web/   server binary (embeds web UI)
 cmd/restic-webctl/ control CLI (direct core.App; no HTTP/auth) — see docs/cli.md
 internal/core/     shared app, stores, coordinator, HTTP handlers
@@ -284,6 +350,16 @@ that API (see [docs/cli.md](docs/cli.md)); you can also call it directly:
 | `GET /api/runs/{id}/events` | SSE: run state, progress and log, resumable via `Last-Event-ID` |
 | `GET /api/events` | SSE: run-level state changes across the app |
 | `GET /api/repositories` | secrets are omitted; `hasPassword` / `hasSecretKey` report whether one is set |
+| `POST /api/repositories/{id}/restore` | `{ snapshotId, target, include?: [paths], stopContainers?: bool }` |
+| `POST /api/repositories/{id}/download` | `{ snapshotId, include?: [paths] }` |
+| `POST /api/repositories/{id}/restore-db` | `202` database restore: `{ snapshotId, databaseId, into?, safetyBackup? (default true) }` |
+| `GET /api/repositories/{id}/snapshots/{sid}/ls` | one folder of a snapshot, `?path=/dir`; the listing is cached per snapshot |
+| `GET /api/databases` | database sources (CRUD like folders) |
+| `GET /api/docker/status` | whether the Docker socket answers and whether Coolify runs the host |
+| `GET /api/docker/resources` | Coolify resources with domains, volumes, database servers and linked databases |
+| `GET /api/docker/containers/{id}/databases` | databases inside a database container |
+| `GET /api/docker/containers-using` | `?path=`: running containers that use a local path |
+| `POST /api/docker/jobs` | one-step job from discovery: `{ kind: "folder", path }` or `{ kind: "database", container, database }`, plus `name`, `repositoryId`, `schedule?` |
 
 Every other `/api/*` route requires the session cookie from setup or login.
 
@@ -331,8 +407,11 @@ stored choice is applied before first paint, so the page never flashes.
 | Test connection | `restic -r <repo> cat config`                           |
 | Initialize      | `restic -r <repo> init` (also run automatically by a backup against an uninitialized repository) |
 | Backup          | `restic -r <repo> backup <src> --tag resticweb-job:<id> --json` |
+| Database backup | `docker exec <db> pg_dump …` piped into `restic backup --stdin --stdin-filename <db>.sql --tag resticweb-job:<id> --tag resticweb-db:<engine>` |
+| Database restore| safety backup as above, then drop + create, then `restic dump <id> /<db>.sql` piped into `docker exec -i <db> psql …` (or `mariadb`/`mysql`) |
+| Browse snapshot | `restic -r <repo> ls --json <id>`                        |
 | List snapshots  | `restic -r <repo> snapshots [--tag …] --json`           |
-| Restore         | `restic restore <id> --target … --delete --json` (in-place uses `/` plus `--include` of the folder) |
+| Restore         | `restic restore <id> --target … --delete --json` (in-place uses `/` plus `--include` of the folder, or of each selected path) |
 | Download (zip)  | restore into a temp workspace, then stream a zip        |
 | Unlock          | `restic -r <repo> unlock` (removes only stale locks)    |
 | Retention       | `restic -r <repo> forget --tag … --keep-* --prune --json` |
@@ -368,6 +447,20 @@ stored choice is applied before first paint, so the page never flashes.
   failed run rather than as validation.
 - restic must be the sole writer per repository for the stale-lock handling to be
   safe.
+- Database backups support PostgreSQL, MySQL and MariaDB (one database per
+  source). Redis, MongoDB and others can be backed up as volumes; for a
+  consistent copy, stop them or use their own dump first. A database restore
+  replaces the database as a whole: rows and tables created after the backup are
+  gone (restore as a new database to compare first). During a MySQL/MariaDB
+  restore the apps using the database are not stopped; one that recreates its
+  tables on connect can make the import fail (it is then rolled back).
+- Stopping the app (a redeploy sends SIGTERM) stops its runs cleanly first:
+  restores roll back and stopped sites start again. `docker-compose.yaml` gives
+  it 60 seconds (`stop_grace_period`). If it is killed anyway, the next start
+  marks those runs interrupted, says how to recover, and starts any site
+  containers a restore had stopped. `restic-webctl` does the same on Ctrl-C.
+- Restoring a volume while its site runs is allowed; tick "Stop the site while
+  restoring" to stop the containers that use it and start them again after.
 - Scheduled backups only fire while this process is running. Closing the browser
   is fine; quitting the binary is not.
 

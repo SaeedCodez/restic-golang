@@ -15,6 +15,7 @@ import JobDetail from "@/routes/job-detail";
 import Repositories from "@/routes/repositories";
 import RepositoryDetail from "@/routes/repository-detail";
 import FoldersRoute from "@/routes/folders";
+import CoolifyRoute from "@/routes/coolify";
 import ActivityRoute from "@/routes/activity";
 import RunView from "@/routes/run";
 import NotFound from "@/routes/not-found";
@@ -63,6 +64,7 @@ const router = createHashRouter([
       { path: "repositories", element: <Repositories /> },
       { path: "repositories/:id", element: <RepositoryDetail /> },
       { path: "folders", element: <FoldersRoute /> },
+      { path: "coolify", element: <CoolifyRoute /> },
       { path: "activity", element: <ActivityRoute /> },
       { path: "runs/:id", element: <RunView /> },
       { path: "settings", element: <Settings /> },

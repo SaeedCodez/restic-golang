@@ -29,6 +29,7 @@ func (c *CLI) cmdStatus(args []string) int {
 		"counts": map[string]int{
 			"repositories": c.app.Repos.Count(),
 			"folders":      c.app.Folders.Count(),
+			"databases":    c.app.Databases.Count(),
 			"jobs":         c.app.Jobs.Count(),
 		},
 		"activeRuns": activeRunsOrEmpty(c.app.Runs.ActiveRuns()),
@@ -53,6 +54,7 @@ func (c *CLI) cmdStatus(args []string) int {
 	}
 	fmt.Printf("repositories:\t%d\n", c.app.Repos.Count())
 	fmt.Printf("folders:\t%d\n", c.app.Folders.Count())
+	fmt.Printf("databases:\t%d\n", c.app.Databases.Count())
 	fmt.Printf("jobs:\t%d\n", c.app.Jobs.Count())
 
 	active := c.app.Runs.ActiveRuns()
