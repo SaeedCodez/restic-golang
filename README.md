@@ -343,7 +343,7 @@ that API (see [docs/cli.md](docs/cli.md)); you can also call it directly:
 | `POST /api/auth/password` | change password (requires session) |
 | `GET /api/jobs` | each job carries its `lastRun`, `runCount`, and schedule health (`nextDueAt`, `scheduleState`) |
 | `POST /api/jobs/{id}/run` | `202` with the new run id, or `409` `busy` naming the blocking run |
-| `POST /api/jobs/{id}/retention` | `202` with a forget+prune run; requires retention enabled on the job |
+| `POST /api/jobs/{id}/retention` | `202` with a forget+prune run; requires retention enabled on the job. `{ dryRun: true }` only previews (forget --dry-run, no lock) |
 | `POST /api/jobs/{id}/forget` | `202` forget+prune of this job's tagged snapshots; `{ deleteJob: true }` removes the job after success |
 | `POST /api/repositories/{id}/forget` | `202` forget+prune of one snapshot (`{ snapshotId }`) |
 | `POST /api/repositories/{id}/reset` | `202` forget+prune of every snapshot; the repository entity stays |

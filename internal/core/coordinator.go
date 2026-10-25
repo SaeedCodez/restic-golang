@@ -527,6 +527,12 @@ func (c *Coordinator) drive(ctx context.Context, ar *activeRun, exec runExec) {
 
 // StartRetention starts a forget+prune run for a job's tagged snapshots.
 func (c *Coordinator) StartRetention(jobID, trigger string) (*Run, error) {
+	return c.StartRetentionWith(jobID, trigger, false)
+}
+
+// StartRetentionWith is StartRetention, or with dryRun a preview: the run logs
+// how many snapshots the policy keeps and would remove, and changes nothing.
+func (c *Coordinator) StartRetentionWith(jobID, trigger string, dryRun bool) (*Run, error) {
 	if trigger == "" {
 		trigger = TriggerManual
 	}
@@ -556,6 +562,14 @@ func (c *Coordinator) StartRetention(jobID, trigger string) (*Run, error) {
 			"policy":  desc,
 			"preset":  policy.Preset,
 		},
+	}
+	if dryRun {
+		run.Params["dryRun"] = "true"
+		return c.startRun(repo, run, func(ctx context.Context, h *runHandle) (int, error) {
+			h.Log("info", "system", "Previewing retention ("+desc+"): nothing is forgotten or pruned.")
+			h.Log("info", "system", fmt.Sprintf("Checking which snapshots tagged %s in repository %q the policy would keep", tag, repo.Name))
+			return c.runner.PreviewForget(ctx, &repo, tag, policy, h)
+		})
 	}
 	return c.startRun(repo, run, func(ctx context.Context, h *runHandle) (int, error) {
 		switch trigger {

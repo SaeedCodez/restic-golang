@@ -95,6 +95,7 @@ type fakeRunner struct {
 	snapTags        []string // tags passed to Snapshots, for assertions
 	initCount       int      // number of Init calls, for assertions
 	forgetCalls     []forgetCall
+	previewCalls    []forgetCall
 	forgetSnapCalls []forgetSnapshotsCall
 	checkCalls      []string
 	stdinCalls      []stdinCall
@@ -203,6 +204,15 @@ func (f *fakeRunner) Forget(ctx context.Context, repo *Repository, tag string, p
 		return f.streamFn(ctx, KindRetention, sink)
 	}
 	sink.Log("info", "stdout", "fake forget applied")
+	return 0, nil
+}
+
+func (f *fakeRunner) PreviewForget(ctx context.Context, repo *Repository, tag string, policy JobRetention, sink RunSink) (int, error) {
+	sink.PID(4242, "faketoken")
+	f.mu.Lock()
+	f.previewCalls = append(f.previewCalls, forgetCall{Tag: tag, Policy: policy})
+	f.mu.Unlock()
+	sink.Log("info", "stdout", "Keeping 3 snapshot(s), removing 2: a, b.")
 	return 0, nil
 }
 

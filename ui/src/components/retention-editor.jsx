@@ -105,6 +105,15 @@ export function RetentionEditor({ job, onSaved, stay = false }) {
     save(form);
   };
 
+  // A preview runs `restic forget --dry-run`: its log lists, per group, how
+  // many snapshots the saved policy keeps and would remove.
+  const preview = async () => {
+    setApplying(true);
+    const res = await Jobs.retention(job.id, { dryRun: true });
+    setApplying(false);
+    handleStartResponse(res, navigate, "Could not start the retention preview.", { stay: false });
+  };
+
   const applyNow = async () => {
     const ok = await confirm({
       title: "Apply retention now?",
@@ -213,15 +222,26 @@ export function RetentionEditor({ job, onSaved, stay = false }) {
 
           <div className="flex flex-wrap items-center justify-end gap-2">
             {retentionEnabled ? (
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={busy || applying}
-                onClick={applyNow}
-              >
-                {applying ? "Starting…" : "Apply now"}
-              </Button>
+              <>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  disabled={busy || applying}
+                  onClick={preview}
+                >
+                  Preview
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={busy || applying}
+                  onClick={applyNow}
+                >
+                  {applying ? "Starting…" : "Apply now"}
+                </Button>
+              </>
             ) : null}
             <Button type="submit" size="sm" disabled={busy}>
               {busy ? "Saving…" : "Save retention"}

@@ -117,7 +117,8 @@ export const Jobs = {
   update: (id, b) => api.put(`/api/jobs/${id}`, b),
   remove: (id) => api.del(`/api/jobs/${id}`),
   run: (id) => api.post(`/api/jobs/${id}/run`),
-  retention: (id) => api.post(`/api/jobs/${id}/retention`),
+  /** dryRun previews what the policy keeps and removes, changing nothing. */
+  retention: (id, { dryRun } = {}) => api.post(`/api/jobs/${id}/retention`, { dryRun: !!dryRun }),
   forget: (id, { deleteJob } = {}) => api.post(`/api/jobs/${id}/forget`, { deleteJob: !!deleteJob }),
   runs: (id, params = {}) => {
     const q = new URLSearchParams();

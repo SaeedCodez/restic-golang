@@ -43,7 +43,13 @@ func (s *Server) handleJobRetention(w http.ResponseWriter, r *http.Request) {
 	if !s.requireRestic(w) {
 		return
 	}
-	run, err := s.app.Coord.StartRetention(r.PathValue("id"), TriggerManual)
+	var body struct {
+		DryRun bool `json:"dryRun"`
+	}
+	if !decodeJSONAllowEmpty(w, r, &body) {
+		return
+	}
+	run, err := s.app.Coord.StartRetentionWith(r.PathValue("id"), TriggerManual, body.DryRun)
 	if err != nil {
 		writeStartError(w, err)
 		return

@@ -231,3 +231,33 @@ func TestJobRetentionPersisted(t *testing.T) {
 		t.Fatalf("persisted retention = %+v", reloaded.Retention)
 	}
 }
+
+func TestPreviewForgetArgsAreADryRunWithoutLockOrPrune(t *testing.T) {
+	args, err := previewForgetArgs("resticweb-job:abc", JobRetention{KeepLast: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(args, " ")
+	if strings.Contains(got, "--prune") || !strings.Contains(got, "--dry-run --no-lock") || !strings.Contains(got, "--keep-last 5") {
+		t.Fatalf("args = %s", got)
+	}
+}
+
+func TestRetentionPreviewChangesNothing(t *testing.T) {
+	fake := &fakeRunner{installed: true}
+	app := newRunTestApp(t, fake)
+	_, jobID := makeJob(t, app, "prev", "/data/prev")
+	job, _ := app.Jobs.Get(jobID)
+	job.Retention = &JobRetention{Enabled: true, Preset: RetentionPresetBalanced}
+	if _, err := app.Jobs.Update(jobID, job); err != nil {
+		t.Fatal(err)
+	}
+	run, err := app.Coord.StartRetentionWith(jobID, TriggerManual, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	final := waitForStatus(t, app.Runs, run.ID, StatusSuccess, 2*time.Second)
+	if final.Params["dryRun"] != "true" || len(fake.recordedForgets()) != 0 || len(fake.previewCalls) != 1 {
+		t.Fatalf("dryRun=%q forgets=%d previews=%d", final.Params["dryRun"], len(fake.recordedForgets()), len(fake.previewCalls))
+	}
+}

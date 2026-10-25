@@ -275,7 +275,7 @@ restic-webctl job create --name NAME --db-source ID|NAME --repo ID|NAME […]
 restic-webctl job update <id|name> […]
 restic-webctl job delete <id|name> [--forget]
 restic-webctl job run <id|name> [--wait] [--follow]
-restic-webctl job retention <id|name> [--wait] [--follow]
+restic-webctl job retention <id|name> [--dry-run] [--wait] [--follow]
 restic-webctl job forget <id|name> [--delete-job] [--wait] [--follow]
 restic-webctl job runs <id|name> [--limit N]
 restic-webctl job snapshots <id|name>
@@ -284,6 +284,11 @@ restic-webctl job snapshots <id|name>
 A database job's backup dumps the database inside its container and stores it
 as one file, `<database>.sql`, tagged `resticweb-db:<engine>`. If the dump
 fails, no snapshot is saved and the run fails with the dump tool's message.
+
+`job retention --dry-run` previews the policy (`restic forget --dry-run
+--no-lock`): the run log says, per host/path group, how many snapshots are kept
+and which would be removed. Nothing is forgotten or pruned, and it takes no
+lock, so it works even while the repository is locked.
 
 `job delete` removes the job from the app and leaves restic snapshots in place.
 `job delete --forget` (or `job forget --delete-job`) forgets that job's tagged

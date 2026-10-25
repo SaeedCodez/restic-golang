@@ -47,8 +47,9 @@ func (c *CLI) cmdJob(args []string) int {
 		if err := requireArgs(args[1:], 1, helpJob()); err != nil {
 			return c.fail(err)
 		}
-		_, wait, follow := parseWaitFollow(args[2:])
-		return c.jobRetention(args[1], wait, follow)
+		rest, wait, follow := parseWaitFollow(args[2:])
+		_, dryRun := hasBoolFlag(rest, "--dry-run")
+		return c.jobRetention(args[1], dryRun, wait, follow)
 	case "forget":
 		if err := requireArgs(args[1:], 1, helpJob()); err != nil {
 			return c.fail(err)
@@ -429,12 +430,12 @@ func (c *CLI) jobRun(query string, wait, follow bool) int {
 	return c.startAndMaybeWait(run, err, wait, follow)
 }
 
-func (c *CLI) jobRetention(query string, wait, follow bool) int {
+func (c *CLI) jobRetention(query string, dryRun, wait, follow bool) int {
 	job, err := c.resolveJob(query)
 	if err != nil {
 		return c.fail(err)
 	}
-	run, err := c.app.Coord.StartRetention(job.ID, core.TriggerManual)
+	run, err := c.app.Coord.StartRetentionWith(job.ID, core.TriggerManual, dryRun)
 	return c.startAndMaybeWait(run, err, wait, follow)
 }
 

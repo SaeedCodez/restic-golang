@@ -107,7 +107,7 @@ func helpJob() string {
   restic-webctl job update <id|name> [fields…]
   restic-webctl job delete <id|name> [--forget]
   restic-webctl job run <id|name> [--wait] [--follow]
-  restic-webctl job retention <id|name> [--wait] [--follow]
+  restic-webctl job retention <id|name> [--dry-run] [--wait] [--follow]
   restic-webctl job forget <id|name> [--delete-job] [--wait] [--follow]
   restic-webctl job runs <id|name> [--limit N]
   restic-webctl job snapshots <id|name>

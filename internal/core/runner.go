@@ -59,6 +59,10 @@ type Runner interface {
 	// Forget applies a keep-policy to snapshots with the given tag, then prunes
 	// unreferenced data (`restic forget --prune`). Returns restic's exit code.
 	Forget(ctx context.Context, repo *Repository, tag string, policy JobRetention, sink RunSink) (int, error)
+	// PreviewForget reports what Forget would keep and remove, changing
+	// nothing (`restic forget --dry-run --no-lock`): it takes no lock, so it
+	// also works while another process holds the repository.
+	PreviewForget(ctx context.Context, repo *Repository, tag string, policy JobRetention, sink RunSink) (int, error)
 	// ForgetSnapshots removes the given snapshot IDs, then prunes unreferenced
 	// data. An empty list is a no-op success (nothing to forget).
 	ForgetSnapshots(ctx context.Context, repo *Repository, snapshotIDs []string, sink RunSink) (int, error)
@@ -386,6 +390,32 @@ func (*resticRunner) Forget(ctx context.Context, repo *Repository, tag string, p
 		return -1, err
 	}
 	return streamRestic(ctx, repo, KindRetention, sink, args...)
+}
+
+func (*resticRunner) PreviewForget(ctx context.Context, repo *Repository, tag string, policy JobRetention, sink RunSink) (int, error) {
+	args, err := previewForgetArgs(tag, policy)
+	if err != nil {
+		return -1, err
+	}
+	return streamRestic(ctx, repo, KindRetention, sink, args...)
+}
+
+// previewForgetArgs is forgetArgs as a dry run: nothing is forgotten or
+// pruned, and no lock is taken.
+func previewForgetArgs(tag string, policy JobRetention) ([]string, error) {
+	args, err := forgetArgs(tag, policy)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(args)+1)
+	for _, a := range args {
+		if a == "--prune" {
+			out = append(out, "--dry-run", "--no-lock")
+			continue
+		}
+		out = append(out, a)
+	}
+	return out, nil
 }
 
 // forgetSnapshotBatchSize caps how many snapshot ids are passed to one
