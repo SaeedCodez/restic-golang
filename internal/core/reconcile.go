@@ -34,6 +34,7 @@ func reapOrphan(pid int, startToken string) bool {
 func (a *App) Reconcile() {
 	// Download workspaces are ephemeral; drop any left by a previous session.
 	_ = os.RemoveAll(filepath.Join(a.DataDir, "downloads"))
+	_ = os.RemoveAll(filepath.Join(a.DataDir, spoolDir))
 
 	repoIDs, stopped := a.Runs.reconcile(reapOrphan)
 	if a.RetainRunsPerJob > 0 {

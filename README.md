@@ -126,9 +126,12 @@ backup keeps working after Coolify recreates a container under a new name.
 
 **Database backups** run the engine's own dump tool inside the database
 container (`pg_dump`, `mariadb-dump` or `mysqldump`) with the credentials from
-that container's environment, and stream the dump into
+that container's environment. The dump is written to a spool file in the data
+directory at full speed (so the database is never held up by slow storage),
+checked for its completion marker, and then stored with
 `restic backup --stdin`. The app never reads or stores database passwords. A
-dump that fails leaves no snapshot. Each dump is one file, `<database>.sql`, so
+dump that fails leaves no snapshot. The spool needs free space in the data
+volume about the size of the largest dump. Each dump is one file, `<database>.sql`, so
 it deduplicates like any other backup and downloads as a zip.
 
 **Restoring a database** replaces it with the dump, so it is exactly as it was

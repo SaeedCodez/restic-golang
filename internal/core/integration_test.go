@@ -185,7 +185,7 @@ func runDatabaseRoundTrip(t *testing.T, tc dbEngineCase) {
 	if out, err := exec.Command("docker", append(args, tc.image)...).CombinedOutput(); err != nil {
 		t.Fatalf("docker run: %v\n%s", err, out)
 	}
-	t.Cleanup(func() { exec.Command("docker", "rm", "-f", name).Run() })
+	t.Cleanup(func() { exec.Command("docker", "rm", "-f", "-v", name).Run() })
 	waitDatabaseReady(t, d, name, tc.engine)
 
 	query := func(db, stmt string) string {

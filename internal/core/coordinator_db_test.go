@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -85,6 +87,13 @@ func TestDatabaseBackupStreamsDumpIntoRestic(t *testing.T) {
 	execs := fd.recordedExecs()
 	if execKinds(execs) != "dump" || execs[0].Container != "mdb1" || execs[0].Args[0] != "shop" {
 		t.Fatalf("execs = %+v", execs)
+	}
+	// The dump is spooled first and the spool file is gone afterwards.
+	if !strings.Contains(logText(t, app, run.ID), "Dump complete") {
+		t.Fatal("the spooled dump should be logged before restic stores it")
+	}
+	if left, _ := os.ReadDir(filepath.Join(app.DataDir, spoolDir)); len(left) != 0 {
+		t.Fatalf("spool files left behind: %v", left)
 	}
 }
 

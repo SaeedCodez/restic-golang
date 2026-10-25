@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,25 +27,58 @@ import (
 
 // backupDatabase dumps database `name` from cont into the repository. The dump
 // is a single file, <name>.sql, in its snapshot.
+//
+// The dump is written to a spool file in the data directory first and only
+// then streamed into restic. Fed straight into restic, the dump tool would
+// stall whenever restic waits on slow storage, and MariaDB drops a client that
+// stops reading for net_write_timeout (60s by default; mariadb-dump cannot
+// raise it). Spooling also keeps the dump's transaction short, and a failed
+// dump never reaches restic at all.
 func (c *Coordinator) backupDatabase(ctx context.Context, h *runHandle, repo *Repository, cont Container, engine, name string, tags []string, sink RunSink) (int, error) {
 	cmd, err := dumpCmd(engine, name)
 	if err != nil {
 		return 0, err
 	}
+	dir := filepath.Join(c.app.DataDir, spoolDir)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return 0, fmt.Errorf("could not create the dump spool directory: %w", err)
+	}
+	spool, err := os.CreateTemp(dir, name+"-*.sql")
+	if err != nil {
+		return 0, fmt.Errorf("could not create the dump spool file: %w", err)
+	}
+	defer os.Remove(spool.Name())
+	defer spool.Close()
+
 	h.Log("info", "system", fmt.Sprintf("Dumping %s database %q from container %s", engineLabel(engine), name, cont.Name))
+	started := time.Now()
+	tail := &tailWriter{w: spool}
+	if err := c.dbCommand(ctx, h, cont.ID, "the database dump", cmd, nil, tail); err != nil {
+		return 0, err
+	}
+	// The tool exited 0; still, a dump without its closing marker was cut
+	// short and must not be saved.
+	if !dumpComplete(engine, tail.bytes()) {
+		return 0, errors.New("the database dump ended without its completion marker, so it is incomplete")
+	}
+	size, err := spool.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return 0, err
+	}
+	if _, err := spool.Seek(0, io.SeekStart); err != nil {
+		return 0, err
+	}
+	h.Log("info", "system", fmt.Sprintf("Dump complete (%.1f MB in %s); storing it in the repository…",
+		float64(size)/1e6, time.Since(started).Round(time.Second)))
 	return c.runner.BackupStdin(ctx, repo, dumpFileName(name), tags, func(w io.Writer) error {
-		tail := &tailWriter{w: w}
-		if err := c.dbCommand(ctx, h, cont.ID, "the database dump", cmd, nil, tail); err != nil {
-			return err
-		}
-		// The tool exited 0; still, a dump without its closing marker was cut
-		// short and must not be saved.
-		if !dumpComplete(engine, tail.bytes()) {
-			return errors.New("the database dump ended without its completion marker, so it is incomplete")
-		}
-		return nil
+		_, err := io.Copy(w, spool)
+		return err
 	}, sink)
 }
+
+// spoolDir (under the data directory) holds database dumps on their way into
+// restic. Anything left there is from a run that died and is removed on start.
+const spoolDir = "spool"
 
 // resolveDatabaseContainer finds a source's container, noting (and recording)
 // a new name after Coolify recreated it.
