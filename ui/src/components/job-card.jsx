@@ -68,7 +68,7 @@ export function scheduleText(job) {
 
 /**
  * JobCard answers, at a glance: what does this job back up, where to, and is
- * it healthy? The run strip shows its recent backups, newest on the left.
+ * it healthy? The run strip shows its recent backups, newest on the right.
  *
  * A job that is running right now shows live progress inline — the card
  * subscribes to that run's stream (without replaying its log), so the number

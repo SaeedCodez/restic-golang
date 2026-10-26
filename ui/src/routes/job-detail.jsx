@@ -79,7 +79,7 @@ function Overview({ job, strip, totalRuns }) {
         <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
           <h2 className="font-medium">Recent backups</h2>
           <p className="text-sm text-muted-foreground">
-            The last {STRIP_SLOTS}, newest on the left
+            The last {STRIP_SLOTS}, newest on the right
           </p>
         </div>
         <div className="mt-4 flex flex-wrap items-end justify-between gap-x-8 gap-y-4">
