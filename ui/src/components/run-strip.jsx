@@ -47,3 +47,24 @@ export function RunStrip({ runs = [], slots = 24, className }) {
     </div>
   );
 }
+
+/** RunStripLegend names the colours of the run strip once, near the strips it explains. */
+export function RunStripLegend({ className }) {
+  const items = [
+    { label: "Succeeded", fill: "bg-success" },
+    { label: "Warnings", fill: "bg-warning" },
+    { label: "Failed", fill: "bg-destructive" },
+    { label: "Running", fill: "bg-running" },
+    { label: "Stopped", fill: "bg-muted-foreground/45" },
+  ];
+  return (
+    <div className={cn("flex flex-wrap gap-x-5 gap-y-2 text-xs text-muted-foreground", className)}>
+      {items.map((i) => (
+        <span key={i.label} className="flex items-center gap-2">
+          <span className={cn("h-3 w-1.5 rounded-full", i.fill)} />
+          {i.label}
+        </span>
+      ))}
+    </div>
+  );
+}

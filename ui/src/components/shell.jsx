@@ -9,21 +9,18 @@ import {
   Loader2,
   LogOut,
   Menu,
-  Monitor,
-  Moon,
   Settings,
-  Sun,
   Vault,
   Workflow,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { BrandMark, ThemeSwitch } from "@/components/brand";
 import { TONE_TEXT } from "@/components/kind";
 import { useAuth } from "@/lib/auth";
 import { useDockerStatus } from "@/lib/docker";
 import { useLive } from "@/lib/live";
-import { useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
 // Each section's icon takes its kind's hue when active (see components/kind.jsx).
@@ -47,22 +44,6 @@ function useNav() {
     tone: "fuchsia",
   };
   return [...NAV.slice(0, 2), sites, ...NAV.slice(2)];
-}
-
-export function BrandMark({ className }) {
-  return (
-    <span
-      className={cn(
-        "grid size-9 shrink-0 place-items-center rounded-[11px] bg-primary text-primary-foreground",
-        className,
-      )}
-    >
-      <svg viewBox="0 0 24 24" className="size-[18px]" fill="none" aria-hidden="true">
-        <path d="M12 4a8 8 0 1 0 8 8" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
-        <path d="M12 8v4l3 2" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
-      </svg>
-    </span>
-  );
 }
 
 function Brand({ onNavigate }) {
@@ -149,47 +130,6 @@ function ResticStatus() {
       </TooltipTrigger>
       <TooltipContent side="right">{version || "restic is installed"}</TooltipContent>
     </Tooltip>
-  );
-}
-
-const THEMES = [
-  { value: "light", label: "Light", icon: Sun },
-  { value: "dark", label: "Dark", icon: Moon },
-  { value: "system", label: "System", icon: Monitor },
-];
-
-/** ThemeSwitch is a three-way segmented control: light, dark, or follow the system. */
-export function ThemeSwitch({ className }) {
-  const { theme, setTheme } = useTheme();
-  return (
-    <div
-      role="radiogroup"
-      aria-label="Theme"
-      className={cn("flex items-center gap-0.5 rounded-[11px] bg-secondary p-1", className)}
-    >
-      {THEMES.map(({ value, label, icon: Icon }) => (
-        <Tooltip key={value}>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              role="radio"
-              aria-checked={theme === value}
-              aria-label={`${label} theme`}
-              onClick={() => setTheme(value)}
-              className={cn(
-                "grid h-8 flex-1 place-items-center rounded-lg px-2.5 transition-colors",
-                theme === value
-                  ? "bg-card text-foreground shadow-[0_1px_2px_rgb(0_0_0/0.08)]"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <Icon className="size-4" />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent>{label}</TooltipContent>
-        </Tooltip>
-      ))}
-    </div>
   );
 }
 

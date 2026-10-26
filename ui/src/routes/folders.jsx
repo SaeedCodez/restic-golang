@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Link, useLocation } from "react-router-dom";
 import { toast } from "sonner";
-import { Database, FolderOpen, Pencil, Plus, Server, Trash2 } from "lucide-react";
+import { Container, Database, FolderOpen, Pencil, Plus, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -14,14 +14,15 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { EmptyState } from "@/components/empty";
+import { EmptyState, ErrorState, InlineError } from "@/components/empty";
+import { Field } from "@/components/fields";
+import { IconTile } from "@/components/kind";
 import { ListPagination } from "@/components/pagination";
-import { Mono, Page, PageHeader } from "@/components/page";
+import { Page, PageHeader, Section } from "@/components/page";
 import { useConfirm } from "@/components/confirm";
-import { Databases, Folders, errorOf } from "@/lib/api";
+import { Databases, Folders, Jobs, errorOf } from "@/lib/api";
 import { useDockerStatus } from "@/lib/docker";
 import { engineLabel } from "@/lib/snapshots";
 import { PAGE_SIZE, pageSlice } from "@/lib/pagination";
@@ -68,9 +69,8 @@ function FolderDialog({ open, onOpenChange, folder, onSaved }) {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="folder-name">Name</Label>
+          <div className="space-y-5">
+            <Field label="Name" htmlFor="folder-name">
               <Input
                 id="folder-name"
                 value={name}
@@ -78,22 +78,21 @@ function FolderDialog({ open, onOpenChange, folder, onSaved }) {
                 placeholder="Documents"
                 autoFocus
               />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="folder-path">Absolute path</Label>
+            </Field>
+            <Field
+              label="Absolute path"
+              htmlFor="folder-path"
+              hint="The directory as this app's server sees it."
+            >
               <Input
                 id="folder-path"
                 value={path}
                 onChange={(e) => setPath(e.target.value)}
                 placeholder="/home/you/Documents"
-                className="font-mono text-xs"
+                className="font-mono text-sm"
               />
-            </div>
-            {error ? (
-              <p className="rounded-md bg-destructive/10 px-3 py-2 text-[13px] text-destructive">
-                {error}
-              </p>
-            ) : null}
+            </Field>
+            <InlineError>{error}</InlineError>
           </div>
 
           <DialogFooter>
@@ -111,18 +110,109 @@ function FolderDialog({ open, onOpenChange, folder, onSaved }) {
 }
 
 /**
+ * UsedBy names the jobs that back a source up, linking to each, or says that
+ * none does yet with a way to make one.
+ */
+function UsedBy({ jobs }) {
+  if (!jobs) return null;
+  if (jobs.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        No job backs this up yet.{" "}
+        <Link to="/jobs" state={{ create: true }} className="font-medium text-primary hover:underline">
+          Create a job
+        </Link>
+      </p>
+    );
+  }
+  return (
+    <p className="min-w-0 text-sm text-muted-foreground">
+      Backed up by{" "}
+      {jobs.map((j, i) => (
+        <React.Fragment key={j.id}>
+          {i > 0 ? ", " : ""}
+          <Link to={`/jobs/${j.id}`} className="font-medium text-foreground hover:text-primary hover:underline">
+            {j.name}
+          </Link>
+        </React.Fragment>
+      ))}
+    </p>
+  );
+}
+
+/**
+ * SourceCard is one folder or database: its name and where it lives, which
+ * jobs use it, and its edit and delete controls.
+ */
+function SourceCard({ icon, title, badge, location, jobs, actions }) {
+  return (
+    <Card className="flex flex-col gap-4 p-5 transition-colors hover:border-input">
+      <div className="flex items-start gap-4">
+        <IconTile icon={icon} tone="fuchsia" />
+        <div className="min-w-0 flex-1">
+          <p className="flex min-w-0 items-center gap-2">
+            <span className="display truncate text-md font-semibold">{title}</span>
+            {badge}
+          </p>
+          <p className="mt-1 truncate font-mono text-[0.8125rem] text-muted-foreground" title={location}>
+            {location}
+          </p>
+        </div>
+        <div className="-mr-1.5 -mt-1 flex shrink-0 items-center gap-0.5">{actions}</div>
+      </div>
+      {jobs ? (
+        <div className="border-t border-border pt-3.5">
+          <UsedBy jobs={jobs} />
+        </div>
+      ) : null}
+    </Card>
+  );
+}
+
+function IconAction({ label, onClick, destructive, icon: Icon }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={onClick}
+          className={destructive ? "text-muted-foreground hover:text-destructive" : undefined}
+          aria-label={label}
+        >
+          <Icon />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{label.split(" ")[0]}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+function SourceGridSkeleton() {
+  return (
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+      {[0, 1].map((i) => (
+        <Skeleton key={i} className="h-[138px] rounded-2xl" />
+      ))}
+    </div>
+  );
+}
+
+/**
  * DatabaseSources lists the databases jobs can back up. They are added from the
  * Coolify/Docker page, where the database is picked from the running servers.
  */
-function DatabaseSources() {
+function DatabaseSources({ jobsBySource }) {
   const confirm = useConfirm();
   const docker = useDockerStatus();
   const loader = React.useCallback(async () => {
     const res = await Databases.list();
+    if (!res.ok) throw new Error(errorOf(res, "Could not load the databases."));
     return res.body?.databases || [];
   }, []);
-  const { data, loading, reload } = useFetch(loader, { initial: [] });
+  const { data, loading, error, reload } = useFetch(loader);
   const databases = data || [];
+  const place = docker?.coolify ? "Coolify" : "Docker";
 
   const remove = async (db) => {
     const ok = await confirm({
@@ -142,73 +232,86 @@ function DatabaseSources() {
   };
 
   return (
-    <section className="mt-10 space-y-3">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h2 className="display text-base font-medium">Databases</h2>
-          <p className="mt-1 text-[13px] text-muted-foreground">
-            Dumped inside their own container, so the backup is consistent while the site stays up.
-          </p>
-        </div>
-        {docker?.available ? (
-          <Button variant="outline" size="sm" asChild>
+    <Section
+      title={
+        <span className="flex items-center gap-2.5">
+          Databases
+          {databases.length ? <Count n={databases.length} /> : null}
+        </span>
+      }
+      description="Dumped inside their own container, so the backup is consistent while the site stays up."
+      action={
+        docker?.available && databases.length > 0 ? (
+          <Button variant="outline" asChild>
             <Link to="/coolify">
-              <Server />
-              Add from {docker.coolify ? "Coolify" : "Docker"}
+              <Container />
+              Add from {place}
             </Link>
           </Button>
-        ) : null}
-      </div>
-      {loading && databases.length === 0 ? (
-        <Skeleton className="h-16 w-full rounded-xl" />
+        ) : null
+      }
+    >
+      {error && !data ? (
+        <ErrorState title="Could not load the databases" description={error.message} onRetry={reload} />
+      ) : loading && !data ? (
+        <SourceGridSkeleton />
       ) : databases.length === 0 ? (
-        <Card>
-          <EmptyState
-            icon={Database}
-            title="No databases yet"
-            description={
-              docker?.available
-                ? "Pick a database on the Coolify/Docker page and it shows up here."
-                : "Database backups need the Docker socket mounted into this app's container."
-            }
-          />
-        </Card>
+        <EmptyState
+          framed
+          icon={Database}
+          tone="fuchsia"
+          title="No databases yet"
+          description={
+            docker?.available
+              ? `Pick a database on the ${place} page and it shows up here.`
+              : "Database backups need the Docker socket mounted into this app's container."
+          }
+          action={
+            docker?.available ? (
+              <Button asChild>
+                <Link to="/coolify">
+                  <Container />
+                  Add from {place}
+                </Link>
+              </Button>
+            ) : null
+          }
+        />
       ) : (
-        databases.map((db) => (
-          <Card key={db.id} className="transition-colors hover:border-input">
-            <div className="flex flex-wrap items-center gap-3 p-4">
-              <span className="grid size-8 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
-                <Database className="size-4" />
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="display flex items-center gap-2 text-sm font-medium">
-                  {db.name}
-                  <Badge variant="outline">{engineLabel(db.engine)}</Badge>
-                </p>
-                <p className="truncate text-xs text-muted-foreground">
-                  <Mono>{db.database}</Mono> on <Mono>{db.container}</Mono>
-                </p>
-              </div>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    onClick={() => remove(db)}
-                    className="text-muted-foreground hover:text-destructive"
-                    aria-label={`Delete ${db.name}`}
-                  >
-                    <Trash2 />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Delete</TooltipContent>
-              </Tooltip>
-            </div>
-          </Card>
-        ))
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          {databases.map((db) => (
+            <SourceCard
+              key={db.id}
+              icon={Database}
+              title={db.name}
+              badge={<Badge variant="outline">{engineLabel(db.engine)}</Badge>}
+              location={`${db.database} on ${db.container}`}
+              jobs={jobsBySource?.database[db.id] || (jobsBySource ? [] : null)}
+              actions={<IconAction label={`Delete ${db.name}`} icon={Trash2} destructive onClick={() => remove(db)} />}
+            />
+          ))}
+        </div>
       )}
-    </section>
+    </Section>
   );
+}
+
+function Count({ n }) {
+  return (
+    <span className="rounded-full bg-secondary px-2 py-0.5 text-xs font-semibold tabular text-muted-foreground">
+      {n}
+    </span>
+  );
+}
+
+/** Which jobs use each folder and each database, so cards can name them. */
+function groupJobsBySource(jobs) {
+  const out = { folder: {}, database: {} };
+  for (const j of jobs) {
+    if (j.databaseId) (out.database[j.databaseId] ||= []).push(j);
+    else if (j.folderId) (out.folder[j.folderId] ||= []).push(j);
+  }
+  return out;
 }
 
 export default function FoldersRoute() {
@@ -223,9 +326,17 @@ export default function FoldersRoute() {
 
   const loader = React.useCallback(async () => {
     const res = await Folders.list();
+    if (!res.ok) throw new Error(errorOf(res, "Could not load the folders."));
     return res.body?.folders || [];
   }, []);
-  const { data, loading, reload } = useFetch(loader, { initial: [] });
+  const { data, loading, error, reload } = useFetch(loader);
+
+  // Which jobs use what is extra detail: the page works without it.
+  const loadJobs = React.useCallback(async () => {
+    const res = await Jobs.list();
+    return res.ok ? groupJobsBySource(res.body?.jobs || []) : null;
+  }, []);
+  const { data: jobsBySource } = useFetch(loadJobs);
 
   React.useEffect(() => {
     document.title = "Sources · restic backup manager";
@@ -251,6 +362,7 @@ export default function FoldersRoute() {
 
   const folders = data || [];
   const paged = pageSlice(folders, page, PAGE_SIZE);
+  const openCreate = () => setDialog({ open: true, folder: null });
 
   React.useEffect(() => {
     if (page !== paged.page) setPage(paged.page);
@@ -261,90 +373,84 @@ export default function FoldersRoute() {
       <PageHeader
         title="Backup sources"
         description="What jobs back up: folders, named once and reused by any job, and databases, dumped with their own tools."
-        actions={
-          folders.length > 0 ? (
-            <Button onClick={() => setDialog({ open: true, folder: null })}>
-              <Plus />
-              Add folder
-            </Button>
-          ) : null
-        }
       />
 
-      <h2 className="display mb-3 text-base font-medium">Folders</h2>
-      {loading && folders.length === 0 ? (
-        <div className="space-y-3">
-          <Skeleton className="h-16 w-full rounded-xl" />
-          <Skeleton className="h-16 w-full rounded-xl" />
-        </div>
-      ) : folders.length === 0 ? (
-        <EmptyState
-          icon={FolderOpen}
-          title="No folders yet"
-          description="Add the directory you want backed up — give it a name so you never have to retype the path."
-          action={
-            <Button onClick={() => setDialog({ open: true, folder: null })}>
-              <Plus />
-              Add a folder
-            </Button>
+      <div className="space-y-12">
+        <Section
+          title={
+            <span className="flex items-center gap-2.5">
+              Folders
+              {folders.length ? <Count n={folders.length} /> : null}
+            </span>
           }
-        />
-      ) : (
-        <div className="space-y-3">
-          {paged.items.map((folder) => (
-            <Card key={folder.id} className="transition-colors hover:border-input">
-              <div className="flex flex-wrap items-center gap-3 p-4">
-                <span className="grid size-8 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
-                  <FolderOpen className="size-4" />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="display text-sm font-medium">{folder.name}</p>
-                  <p className="truncate font-mono text-xs text-muted-foreground">
-                    {folder.path}
-                  </p>
-                </div>
-                <div className="flex shrink-0 items-center gap-1.5">
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        onClick={() => setDialog({ open: true, folder })}
-                        aria-label={`Edit ${folder.name}`}
-                      >
-                        <Pencil />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>Edit</TooltipContent>
-                  </Tooltip>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        onClick={() => remove(folder)}
-                        className="text-muted-foreground hover:text-destructive"
-                        aria-label={`Delete ${folder.name}`}
-                      >
-                        <Trash2 />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>Delete</TooltipContent>
-                  </Tooltip>
-                </div>
+          description="Directories on this server, each named once so any job can pick it from a list."
+          action={
+            folders.length > 0 ? (
+              <Button onClick={openCreate}>
+                <Plus />
+                Add folder
+              </Button>
+            ) : null
+          }
+        >
+          {error && !data ? (
+            <ErrorState title="Could not load the folders" description={error.message} onRetry={reload} />
+          ) : loading && !data ? (
+            <SourceGridSkeleton />
+          ) : folders.length === 0 ? (
+            <EmptyState
+              framed
+              icon={FolderOpen}
+              tone="fuchsia"
+              title="No folders yet"
+              description="Add the directory you want backed up — give it a name so you never have to retype the path."
+              action={
+                <Button onClick={openCreate}>
+                  <Plus />
+                  Add a folder
+                </Button>
+              }
+            />
+          ) : (
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                {paged.items.map((folder) => (
+                  <SourceCard
+                    key={folder.id}
+                    icon={FolderOpen}
+                    title={folder.name}
+                    location={folder.path}
+                    jobs={jobsBySource ? jobsBySource.folder[folder.id] || [] : null}
+                    actions={
+                      <>
+                        <IconAction
+                          label={`Edit ${folder.name}`}
+                          icon={Pencil}
+                          onClick={() => setDialog({ open: true, folder })}
+                        />
+                        <IconAction
+                          label={`Delete ${folder.name}`}
+                          icon={Trash2}
+                          destructive
+                          onClick={() => remove(folder)}
+                        />
+                      </>
+                    }
+                  />
+                ))}
               </div>
-            </Card>
-          ))}
-          <ListPagination
-            page={paged.page}
-            pageSize={PAGE_SIZE}
-            total={paged.total}
-            onPageChange={setPage}
-          />
-        </div>
-      )}
+              <ListPagination
+                page={paged.page}
+                pageSize={PAGE_SIZE}
+                total={paged.total}
+                onPageChange={setPage}
+              />
+            </div>
+          )}
+        </Section>
 
-      <DatabaseSources />
+        <DatabaseSources jobsBySource={jobsBySource} />
+      </div>
 
       <FolderDialog
         open={dialog.open}

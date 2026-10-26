@@ -3,7 +3,6 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -12,6 +11,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useConfirm } from "@/components/confirm";
+import { InlineError } from "@/components/empty";
+import { Field, SwitchRow } from "@/components/fields";
 import { Jobs, errorOf } from "@/lib/api";
 import { handleStartResponse } from "@/lib/start-run";
 import {
@@ -139,34 +140,30 @@ export function RetentionEditor({ job, onSaved, stay = false }) {
       <CardHeader>
         <div>
           <CardTitle>Snapshot retention</CardTitle>
-          <CardDescription className="mt-1">
+          <CardDescription className="mt-1.5">
             After each successful backup, forget old snapshots for this job and prune
             unused data. Other jobs sharing the repository are left alone.
           </CardDescription>
         </div>
       </CardHeader>
       <CardContent>
-        <form onSubmit={onSubmit} className="space-y-4">
-          <label className="flex cursor-pointer items-center justify-between gap-3 rounded-md border border-border px-3 py-2.5">
-            <div>
-              <p className="text-sm font-medium">Enable retention</p>
-              <p className="text-[13px] text-muted-foreground">
-                {form.enabled ? policyLine || "On" : "Off — keep all snapshots"}
-              </p>
-            </div>
-            <input
-              type="checkbox"
-              className="size-4 accent-foreground"
-              checked={form.enabled}
-              onChange={(e) => set({ enabled: e.target.checked })}
-              disabled={busy}
-            />
-          </label>
+        <form onSubmit={onSubmit} className="space-y-5">
+          <SwitchRow
+            id={`ret-enabled-${job.id}`}
+            checked={form.enabled}
+            onCheckedChange={(enabled) => set({ enabled })}
+            disabled={busy}
+            title="Enable retention"
+            description={form.enabled ? policyLine || "On" : "Off — keep all snapshots"}
+          />
 
           {form.enabled ? (
             <div className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="ret-preset">Policy</Label>
+              <Field
+                label="Policy"
+                htmlFor="ret-preset"
+                hint={RETENTION_PRESETS.find((p) => p.id === form.preset)?.description}
+              >
                 <Select value={form.preset} onValueChange={setPreset}>
                   <SelectTrigger id="ret-preset">
                     <SelectValue />
@@ -179,18 +176,12 @@ export function RetentionEditor({ job, onSaved, stay = false }) {
                     ))}
                   </SelectContent>
                 </Select>
-                {RETENTION_PRESETS.find((p) => p.id === form.preset)?.description ? (
-                  <p className="text-[13px] text-muted-foreground">
-                    {RETENTION_PRESETS.find((p) => p.id === form.preset).description}
-                  </p>
-                ) : null}
-              </div>
+              </Field>
 
               {form.preset === "custom" ? (
-                <div className="grid gap-3 sm:grid-cols-2">
+                <div className="grid grid-cols-2 gap-x-3 gap-y-4">
                   {CUSTOM_FIELDS.map((field) => (
-                    <div key={field.key} className="space-y-1.5">
-                      <Label htmlFor={`ret-${field.key}`}>{field.label}</Label>
+                    <Field key={field.key} label={field.label} htmlFor={`ret-${field.key}`} hint={field.hint}>
                       <Input
                         id={`ret-${field.key}`}
                         type="number"
@@ -202,30 +193,25 @@ export function RetentionEditor({ job, onSaved, stay = false }) {
                         }
                         className="font-mono"
                       />
-                      <p className="text-[12px] text-muted-foreground">{field.hint}</p>
-                    </div>
+                    </Field>
                   ))}
                 </div>
               ) : (
-                <p className="text-[13px] text-muted-foreground">
-                  Keeps {policyLine.toLowerCase()}. Snapshots that match any rule are kept.
+                <p className="rounded-xl bg-secondary/60 px-4 py-3 text-sm text-muted-foreground">
+                  Keeps <span className="font-medium text-foreground">{policyLine.toLowerCase()}</span>.
+                  Snapshots that match any rule are kept.
                 </p>
               )}
             </div>
           ) : null}
 
-          {error ? (
-            <p className="rounded-md bg-destructive/10 px-3 py-2 text-[13px] text-destructive">
-              {error}
-            </p>
-          ) : null}
+          <InlineError>{error}</InlineError>
 
           <div className="flex flex-wrap items-center justify-end gap-2">
             {retentionEnabled ? (
               <>
                 <Button
                   type="button"
-                  size="sm"
                   variant="ghost"
                   disabled={busy || applying}
                   onClick={preview}
@@ -234,7 +220,6 @@ export function RetentionEditor({ job, onSaved, stay = false }) {
                 </Button>
                 <Button
                   type="button"
-                  size="sm"
                   variant="outline"
                   disabled={busy || applying}
                   onClick={applyNow}
@@ -243,7 +228,7 @@ export function RetentionEditor({ job, onSaved, stay = false }) {
                 </Button>
               </>
             ) : null}
-            <Button type="submit" size="sm" disabled={busy}>
+            <Button type="submit" disabled={busy}>
               {busy ? "Saving…" : "Save retention"}
             </Button>
           </div>

@@ -1,67 +1,49 @@
-import { useTheme } from "@/lib/theme";
-import { Button } from "@/components/ui/button";
-import { Monitor, Moon, Sun } from "lucide-react";
+import { BrandMark, ThemeSwitch } from "@/components/brand";
+
+/** The kind hues in a row: the brand's colour band, worn on the top edge of the card. */
+const BAND = ["bg-primary", "bg-violet", "bg-cyan", "bg-fuchsia"];
 
 /**
- * AuthLayout is the framed screen for setup and login: same brand mark as the
- * app shell, no navigation, just the form card.
+ * AuthLayout is the framed screen for setup and login: the brand, one card
+ * holding the form, and the theme switch — no navigation.
  */
-export function AuthLayout({ title, description, children }) {
+export function AuthLayout({ title, description, children, footnote }) {
   return (
     <div className="flex min-h-dvh flex-col bg-background">
-      <header className="border-b border-border">
-        <div className="mx-auto flex w-full max-w-md items-center justify-between px-5 py-3 sm:px-0">
-          <div className="flex items-center gap-2.5">
-            <span className="grid size-7 place-items-center rounded-md bg-primary text-primary-foreground">
-              <svg viewBox="0 0 24 24" className="size-4" fill="none" aria-hidden="true">
-                <path
-                  d="M12 4a8 8 0 1 0 8 8"
-                  stroke="currentColor"
-                  strokeWidth="2.5"
-                  strokeLinecap="round"
-                />
-                <path
-                  d="M12 8v4l3 2"
-                  stroke="currentColor"
-                  strokeWidth="2.5"
-                  strokeLinecap="round"
-                />
-              </svg>
-            </span>
-            <span className="display text-[13px] font-medium">restic</span>
-          </div>
-          <ThemeCycle />
-        </div>
+      <header className="flex justify-end px-5 py-4 sm:px-8">
+        <ThemeSwitch />
       </header>
 
-      <main className="flex flex-1 items-start justify-center px-5 py-12 sm:py-16">
-        <div className="w-full max-w-md">
-          <h1 className="display text-[26px] font-semibold leading-tight">{title}</h1>
-          {description ? (
-            <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{description}</p>
+      <main className="flex flex-1 items-start justify-center px-5 pb-16 pt-4 sm:items-center sm:pt-0">
+        <div className="w-full max-w-[27rem]">
+          <div className="mb-8 flex items-center gap-3.5">
+            <BrandMark className="size-12 rounded-[14px]" />
+            <div className="leading-tight">
+              <p className="display text-lg font-semibold">restic</p>
+              <p className="text-sm text-muted-foreground">backup manager</p>
+            </div>
+          </div>
+
+          <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-xl shadow-black/[0.04]">
+            <div className="flex h-1" aria-hidden="true">
+              {BAND.map((c) => (
+                <span key={c} className={`flex-1 ${c}`} />
+              ))}
+            </div>
+            <div className="p-6 sm:p-8">
+              <h1 className="display text-2xl font-semibold leading-tight">{title}</h1>
+              {description ? (
+                <p className="mt-2 text-base text-muted-foreground">{description}</p>
+              ) : null}
+              <div className="mt-7">{children}</div>
+            </div>
+          </div>
+
+          {footnote ? (
+            <p className="mt-6 text-center text-sm text-muted-foreground">{footnote}</p>
           ) : null}
-          <div className="mt-8">{children}</div>
         </div>
       </main>
     </div>
-  );
-}
-
-function ThemeCycle() {
-  const { resolved, setTheme } = useTheme();
-  const next = resolved === "dark" ? "light" : "dark";
-  const Icon = resolved === "dark" ? Moon : Sun;
-  return (
-    <Button
-      variant="ghost"
-      size="icon-sm"
-      aria-label={`Switch to ${next} theme`}
-      onClick={() => setTheme(next)}
-    >
-      <Icon className="size-4" />
-      <span className="sr-only">
-        <Monitor />
-      </span>
-    </Button>
   );
 }

@@ -112,16 +112,70 @@ export function RunRow({ run, showContext = false }) {
   );
 }
 
+/** The day a run started, as a heading: "Today", "Yesterday" or the date. */
+export function dayLabel(iso) {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "Earlier";
+  const start = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const days = Math.round((start(new Date()) - start(d)) / 86400000);
+  if (days === 0) return "Today";
+  if (days === 1) return "Yesterday";
+  return d.toLocaleDateString(undefined, {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: d.getFullYear() === new Date().getFullYear() ? undefined : "numeric",
+  });
+}
+
+/** Consecutive runs that started on the same day, newest day first. */
+function byDay(runs) {
+  const groups = [];
+  for (const run of runs) {
+    const label = dayLabel(run.startedAt);
+    const last = groups[groups.length - 1];
+    if (last && last.label === label) last.runs.push(run);
+    else groups.push({ label, runs: [run] });
+  }
+  return groups;
+}
+
 /**
  * RunHistory lists runs newest-first. Every row navigates to that run, where the
  * full durable log is available — including for runs that finished days ago.
+ * With `groupByDay`, the rows sit under a heading for the day they started.
  */
-export function RunHistory({ runs, showContext = false, emptyMessage = "No runs yet." }) {
+export function RunHistory({
+  runs,
+  showContext = false,
+  groupByDay = false,
+  emptyMessage = "No runs yet.",
+}) {
   if (!runs.length) {
     return (
       <div className="flex flex-col items-center gap-3 px-6 py-10 text-center">
         <IconTile icon={History} />
         <p className="text-sm text-muted-foreground">{emptyMessage}</p>
+      </div>
+    );
+  }
+
+  if (groupByDay) {
+    return (
+      <div>
+        {byDay(runs).map((group) => (
+          <section key={group.label} aria-label={group.label}>
+            <h3 className="border-b border-border bg-secondary/50 px-5 py-2 text-xs font-semibold text-muted-foreground sm:px-6">
+              {group.label}
+              <span className="ml-2 font-normal tabular">{group.runs.length}</span>
+            </h3>
+            <div className="divide-y divide-border border-b border-border last:border-b-0">
+              {group.runs.map((run) => (
+                <RunRow key={run.id} run={run} showContext={showContext} />
+              ))}
+            </div>
+          </section>
+        ))}
       </div>
     );
   }

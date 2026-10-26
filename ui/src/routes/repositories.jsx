@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Link, useLocation } from "react-router-dom";
 import { toast } from "sonner";
-import { Cloud, HardDrive, Pencil, Plus, Trash2 } from "lucide-react";
+import { ArrowRight, Cloud, HardDrive, Pencil, Plus, Trash2, Vault } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
@@ -13,24 +13,20 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { EmptyState } from "@/components/empty";
+import { EmptyState, ErrorState, InlineError } from "@/components/empty";
+import { Field, Segmented } from "@/components/fields";
+import { IconTile, repositoryIcon } from "@/components/kind";
+import { StatusDot } from "@/components/status-badge";
 import { ListPagination } from "@/components/pagination";
 import { Page, PageHeader } from "@/components/page";
 import { useConfirm } from "@/components/confirm";
-import { Repositories, errorOf } from "@/lib/api";
+import { Jobs, Repositories, errorOf } from "@/lib/api";
 import { PAGE_SIZE, pageSlice } from "@/lib/pagination";
 import { useFetch } from "@/lib/use-fetch";
-import { repoLocation } from "@/lib/format";
+import { fmtRelative, fmtTime, repoLocation } from "@/lib/format";
+import { statusLabel } from "@/lib/runs";
 
 const EMPTY = {
   name: "",
@@ -109,9 +105,8 @@ export function RepositoryDialog({ open, onOpenChange, repository, onSaved }) {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="repo-name">Name</Label>
+          <div className="space-y-5">
+            <Field label="Name" htmlFor="repo-name">
               <Input
                 id="repo-name"
                 value={form.name}
@@ -119,56 +114,48 @@ export function RepositoryDialog({ open, onOpenChange, repository, onSaved }) {
                 placeholder="Offsite S3"
                 autoFocus
               />
-            </div>
+            </Field>
 
-            <div className="space-y-2">
-              <Label htmlFor="repo-backend">Backend</Label>
-              <Select
+            <Field label="Backend">
+              <Segmented
+                label="Backend"
+                tone="cyan"
                 value={form.backendType}
-                onValueChange={(v) => setForm((f) => ({ ...f, backendType: v }))}
-              >
-                <SelectTrigger id="repo-backend">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="Local">Local directory</SelectItem>
-                  <SelectItem value="S3">S3-compatible</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+                onChange={(v) => setForm((f) => ({ ...f, backendType: v }))}
+                options={[
+                  { value: "Local", label: "Local directory", icon: HardDrive },
+                  { value: "S3", label: "S3-compatible", icon: Cloud },
+                ]}
+              />
+            </Field>
 
             {isS3 ? (
               <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-2 sm:col-span-2">
-                  <Label htmlFor="repo-endpoint">Endpoint</Label>
+                <Field label="Endpoint" htmlFor="repo-endpoint" className="sm:col-span-2">
                   <Input
                     id="repo-endpoint"
                     value={form.endpoint}
                     onChange={set("endpoint")}
                     placeholder="https://s3.amazonaws.com"
-                    className="font-mono text-xs"
+                    className="font-mono text-sm"
                   />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="repo-bucket">Bucket</Label>
+                </Field>
+                <Field label="Bucket" htmlFor="repo-bucket">
                   <Input id="repo-bucket" value={form.bucket} onChange={set("bucket")} />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="repo-region">Region (optional)</Label>
+                </Field>
+                <Field label="Region (optional)" htmlFor="repo-region">
                   <Input id="repo-region" value={form.region} onChange={set("region")} />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="repo-access">Access key</Label>
+                </Field>
+                <Field label="Access key" htmlFor="repo-access">
                   <Input
                     id="repo-access"
                     value={form.accessKey}
                     onChange={set("accessKey")}
                     autoComplete="off"
-                    className="font-mono text-xs"
+                    className="font-mono text-sm"
                   />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="repo-secret">Secret key</Label>
+                </Field>
+                <Field label="Secret key" htmlFor="repo-secret">
                   <Input
                     id="repo-secret"
                     type="password"
@@ -179,26 +166,29 @@ export function RepositoryDialog({ open, onOpenChange, repository, onSaved }) {
                       repository?.hasSecretKey ? "leave blank to keep the stored key" : ""
                     }
                   />
-                </div>
+                </Field>
               </div>
             ) : (
-              <div className="space-y-2">
-                <Label htmlFor="repo-path">Repository directory</Label>
+              <Field
+                label="Repository directory"
+                htmlFor="repo-path"
+                hint="Created and initialized automatically on the first backup."
+              >
                 <Input
                   id="repo-path"
                   value={form.localPath}
                   onChange={set("localPath")}
                   placeholder="/home/you/restic-repo"
-                  className="font-mono text-xs"
+                  className="font-mono text-sm"
                 />
-                <p className="text-xs text-muted-foreground">
-                  Created and initialized automatically on the first backup.
-                </p>
-              </div>
+              </Field>
             )}
 
-            <div className="space-y-2">
-              <Label htmlFor="repo-password">Repository password</Label>
+            <Field
+              label="Repository password"
+              htmlFor="repo-password"
+              hint="This encrypts everything in the repository. Without it the backups cannot be read — not by this app, and not by anyone else."
+            >
               <Input
                 id="repo-password"
                 type="password"
@@ -211,17 +201,9 @@ export function RepositoryDialog({ open, onOpenChange, repository, onSaved }) {
                     : "encrypts your backups — do not lose it"
                 }
               />
-              <p className="text-xs text-muted-foreground">
-                This encrypts everything in the repository. Without it the backups cannot be
-                read — not by this app, and not by anyone else.
-              </p>
-            </div>
+            </Field>
 
-            {error ? (
-              <p className="rounded-md bg-destructive/10 px-3 py-2 text-[13px] text-destructive">
-                {error}
-              </p>
-            ) : null}
+            <InlineError>{error}</InlineError>
           </div>
 
           <DialogFooter>
@@ -238,6 +220,114 @@ export function RepositoryDialog({ open, onOpenChange, repository, onSaved }) {
   );
 }
 
+/** The backend in words, as it appears on cards and the detail page. */
+export function backendLabel(repo) {
+  return repo?.backendType === "S3" ? "S3-compatible" : "Local directory";
+}
+
+/**
+ * RepositoryCard is one repository: where it is, how many jobs store there and
+ * how the latest of them went. The whole card opens the repository; edit and
+ * delete sit in its footer.
+ */
+function RepositoryCard({ repo, usage, onEdit, onDelete }) {
+  const latest = usage?.latest;
+  return (
+    <Card className="relative flex flex-col transition-colors hover:border-input">
+      <div className="flex items-start gap-4 p-5">
+        <IconTile icon={repositoryIcon(repo)} tone="cyan" />
+        <div className="min-w-0 flex-1">
+          <Link
+            to={`/repositories/${repo.id}`}
+            className="display block truncate text-md font-semibold after:absolute after:inset-0 after:rounded-2xl focus-visible:outline-none"
+          >
+            {repo.name}
+          </Link>
+          <p className="mt-1 truncate font-mono text-[0.8125rem] text-muted-foreground">
+            {repoLocation(repo) || "—"}
+          </p>
+        </div>
+      </div>
+
+      <dl className="grid grid-cols-3 gap-4 px-5 pb-5">
+        <div className="min-w-0">
+          <dt className="text-xs text-muted-foreground">Backend</dt>
+          <dd className="mt-1 truncate text-sm font-medium">{backendLabel(repo)}</dd>
+        </div>
+        <div className="min-w-0">
+          <dt className="text-xs text-muted-foreground">Jobs</dt>
+          <dd className="mt-1 text-sm font-medium tabular">{usage ? usage.jobs : "—"}</dd>
+        </div>
+        <div className="min-w-0">
+          <dt className="text-xs text-muted-foreground">Latest run</dt>
+          <dd className="mt-1 flex items-center gap-2 text-sm font-medium">
+            {latest ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="relative flex min-w-0 items-center gap-2">
+                    <StatusDot status={latest.status} />
+                    <span className="truncate">{fmtRelative(latest.startedAt)}</span>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {statusLabel(latest.status)} · {fmtTime(latest.startedAt)}
+                </TooltipContent>
+              </Tooltip>
+            ) : (
+              <span className="text-muted-foreground">Never</span>
+            )}
+          </dd>
+        </div>
+      </dl>
+
+      <div className="relative mt-auto flex items-center gap-1 border-t border-border px-3 py-2.5">
+        <Button variant="ghost" size="sm" asChild className="text-muted-foreground">
+          <Link to={`/repositories/${repo.id}`}>
+            Snapshots and maintenance
+            <ArrowRight />
+          </Link>
+        </Button>
+        <span className="ml-auto" />
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button variant="ghost" size="icon-sm" onClick={onEdit} aria-label={`Edit ${repo.name}`}>
+              <Pencil />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Edit</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={onDelete}
+              className="text-muted-foreground hover:text-destructive"
+              aria-label={`Delete ${repo.name}`}
+            >
+              <Trash2 />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Delete</TooltipContent>
+        </Tooltip>
+      </div>
+    </Card>
+  );
+}
+
+/** How many jobs store in each repository, and the newest run among them. */
+function usageByRepository(jobs) {
+  const m = {};
+  for (const j of jobs || []) {
+    const u = (m[j.repositoryId] ||= { jobs: 0, latest: null });
+    u.jobs += 1;
+    if (j.lastRun && (!u.latest || new Date(j.lastRun.startedAt) > new Date(u.latest.startedAt))) {
+      u.latest = j.lastRun;
+    }
+  }
+  return m;
+}
+
 export default function RepositoriesRoute() {
   const confirm = useConfirm();
   const location = useLocation();
@@ -249,10 +339,15 @@ export default function RepositoriesRoute() {
   const [page, setPage] = React.useState(1);
 
   const loader = React.useCallback(async () => {
-    const res = await Repositories.list();
-    return res.body?.repositories || [];
+    const [res, jobsR] = await Promise.all([Repositories.list(), Jobs.list()]);
+    if (!res.ok) throw new Error(errorOf(res, "Could not load the repositories."));
+    // Usage is extra detail: without the jobs list the cards still work.
+    return {
+      repositories: res.body?.repositories || [],
+      usage: jobsR.ok ? usageByRepository(jobsR.body?.jobs) : null,
+    };
   }, []);
-  const { data, loading, reload } = useFetch(loader, { initial: [] });
+  const { data, loading, error, reload } = useFetch(loader);
 
   React.useEffect(() => {
     document.title = "Repositories · restic backup manager";
@@ -280,8 +375,9 @@ export default function RepositoriesRoute() {
     }
   };
 
-  const repos = data || [];
+  const repos = data?.repositories || [];
   const paged = pageSlice(repos, page, PAGE_SIZE);
+  const openCreate = () => setDialog({ open: true, repository: null });
 
   React.useEffect(() => {
     if (page !== paged.page) setPage(paged.page);
@@ -294,7 +390,7 @@ export default function RepositoriesRoute() {
         description="Where restic stores encrypted backups. A local directory is the quickest way to try this out — no credentials needed."
         actions={
           repos.length > 0 ? (
-            <Button onClick={() => setDialog({ open: true, repository: null })}>
+            <Button onClick={openCreate}>
               <Plus />
               Add repository
             </Button>
@@ -302,80 +398,45 @@ export default function RepositoriesRoute() {
         }
       />
 
-      {loading && repos.length === 0 ? (
-        <div className="space-y-3">
-          <Skeleton className="h-20 w-full rounded-xl" />
-          <Skeleton className="h-20 w-full rounded-xl" />
+      {error && !data ? (
+        <ErrorState
+          title="Could not load the repositories"
+          description={`${error.message} Check that the server is running, then retry.`}
+          onRetry={reload}
+        />
+      ) : loading && !data ? (
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          {[0, 1].map((i) => (
+            <Skeleton key={i} className="h-[214px] rounded-2xl" />
+          ))}
         </div>
       ) : repos.length === 0 ? (
         <EmptyState
-          icon={HardDrive}
+          framed
+          icon={Vault}
+          tone="cyan"
           title="No repositories yet"
           description="Add one to give your backups somewhere to live. A local directory works with no credentials."
           action={
-            <Button onClick={() => setDialog({ open: true, repository: null })}>
+            <Button onClick={openCreate}>
               <Plus />
               Add a repository
             </Button>
           }
         />
       ) : (
-        <div className="space-y-3">
-          {paged.items.map((repo) => {
-            const Icon = repo.backendType === "S3" ? Cloud : HardDrive;
-            return (
-              <Card key={repo.id} className="transition-colors hover:border-input">
-                <div className="flex flex-wrap items-center gap-3 p-4">
-                  <span className="grid size-8 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
-                    <Icon className="size-4" />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <Link
-                      to={`/repositories/${repo.id}`}
-                      className="display text-sm font-medium hover:underline"
-                    >
-                      {repo.name}
-                    </Link>
-                    <p className="truncate font-mono text-xs text-muted-foreground">
-                      {repoLocation(repo) || "—"}
-                    </p>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-1.5">
-                    <Button variant="outline" size="sm" asChild>
-                      <Link to={`/repositories/${repo.id}`}>Open</Link>
-                    </Button>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          onClick={() => setDialog({ open: true, repository: repo })}
-                          aria-label={`Edit ${repo.name}`}
-                        >
-                          <Pencil />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>Edit</TooltipContent>
-                    </Tooltip>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          onClick={() => remove(repo)}
-                          className="text-muted-foreground hover:text-destructive"
-                          aria-label={`Delete ${repo.name}`}
-                        >
-                          <Trash2 />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>Delete</TooltipContent>
-                    </Tooltip>
-                  </div>
-                </div>
-              </Card>
-            );
-          })}
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            {paged.items.map((repo) => (
+              <RepositoryCard
+                key={repo.id}
+                repo={repo}
+                usage={data.usage ? data.usage[repo.id] || { jobs: 0, latest: null } : null}
+                onEdit={() => setDialog({ open: true, repository: repo })}
+                onDelete={() => remove(repo)}
+              />
+            ))}
+          </div>
           <ListPagination
             page={paged.page}
             pageSize={PAGE_SIZE}

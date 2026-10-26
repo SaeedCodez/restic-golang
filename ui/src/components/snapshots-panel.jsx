@@ -1,6 +1,17 @@
 import * as React from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowDownToLine, Camera, Database, FolderInput, FolderSearch, RefreshCw, Trash2 } from "lucide-react";
+import {
+  ArrowDownToLine,
+  Camera,
+  Database,
+  DatabaseBackup,
+  Ellipsis,
+  FolderInput,
+  FolderOpen,
+  FolderSearch,
+  RefreshCw,
+  Trash2,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -13,12 +24,18 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { EmptyState } from "@/components/empty";
-import { Mono } from "@/components/page";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { EmptyState } from "@/components/empty";
+import { CheckOption, Field, PathValue } from "@/components/fields";
+import { IconTile } from "@/components/kind";
 import { useConfirm } from "@/components/confirm";
 import { DbRestoreDialog } from "@/components/db-restore-dialog";
 import { SnapshotBrowser } from "@/components/snapshot-browser";
@@ -85,76 +102,54 @@ function RestoreDialog({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-3">
+          <div className="space-y-4">
             {hasDefault && !custom ? (
-              <div className="space-y-1.5">
-                <Label>Restore into</Label>
-                <p
-                  className="rounded-md border border-border bg-muted/40 px-3 py-2 font-mono text-xs break-all"
-                  title={defaultTarget.trim()}
-                >
-                  {defaultTarget.trim()}
-                </p>
-              </div>
+              <Field label="Restore into">
+                <PathValue>{defaultTarget.trim()}</PathValue>
+              </Field>
             ) : null}
 
             {hasDefault ? (
-              <label className="flex cursor-pointer items-center justify-between gap-3 rounded-md border border-border px-3 py-2.5">
-                <div>
-                  <p className="text-sm font-medium">Restore to a different path</p>
-                  <p className="text-[13px] text-muted-foreground">
-                    {custom
-                      ? "Snapshot paths are recreated under the path you enter; extra files there are deleted"
-                      : "Keep the job folder above (in-place replace)"}
-                  </p>
-                </div>
-                <input
-                  type="checkbox"
-                  className="size-4 accent-foreground"
-                  checked={custom}
-                  onChange={(e) => {
-                    const on = e.target.checked;
-                    setCustom(on);
-                    if (on && !target.trim()) setTarget(defaultTarget.trim());
-                  }}
-                  disabled={busy}
-                />
-              </label>
+              <CheckOption
+                checked={custom}
+                onChange={(on) => {
+                  setCustom(on);
+                  if (on && !target.trim()) setTarget(defaultTarget.trim());
+                }}
+                disabled={busy}
+                title="Restore to a different path"
+                description={
+                  custom
+                    ? "Snapshot paths are recreated under the path you enter; extra files there are deleted"
+                    : "Keep the job folder above (in-place replace)"
+                }
+              />
             ) : null}
 
             {containers.length > 0 ? (
-              <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border px-3 py-2.5">
-                <input
-                  type="checkbox"
-                  className="mt-0.5 size-4 accent-foreground"
-                  checked={stopSite}
-                  onChange={(e) => setStopSite(e.target.checked)}
-                  disabled={busy}
-                />
-                <span>
-                  <span className="block text-sm font-medium">Stop the site while restoring</span>
-                  <span className="block text-[13px] text-muted-foreground">
-                    {containers.map((c) => c.name).join(", ")} stop first and start again afterwards,
-                    so nothing writes to the folder mid-restore.
-                  </span>
-                </span>
-              </label>
+              <CheckOption
+                checked={stopSite}
+                onChange={setStopSite}
+                disabled={busy}
+                title="Stop the site while restoring"
+                description={`${containers.map((c) => c.name).join(", ")} stop first and start again afterwards, so nothing writes to the folder mid-restore.`}
+              />
             ) : null}
 
             {!hasDefault || custom ? (
-              <div className="space-y-2">
-                <Label htmlFor="restore-target">
-                  {hasDefault ? "Different path (absolute)" : "Restore into (absolute path)"}
-                </Label>
+              <Field
+                label={hasDefault ? "Different path (absolute)" : "Restore into (absolute path)"}
+                htmlFor="restore-target"
+              >
                 <Input
                   id="restore-target"
                   value={target}
                   onChange={(e) => setTarget(e.target.value)}
                   placeholder="/home/you/restored-files"
-                  className="font-mono text-xs"
+                  className="font-mono text-sm"
                   autoFocus={!hasDefault || custom}
                 />
-              </div>
+              </Field>
             ) : null}
           </div>
 
@@ -169,6 +164,107 @@ function RestoreDialog({
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** Snapshots are long lists on busy repositories; they open a page at a time. */
+const PAGE = 20;
+
+/** What a snapshot holds, as an icon and hue: files, a database dump, or a safety copy. */
+function snapshotLook(s) {
+  if (isSafetySnapshot(s)) return { icon: DatabaseBackup, tone: "warning" };
+  if (snapshotEngine(s)) return { icon: Database, tone: "fuchsia" };
+  return { icon: FolderOpen, tone: "fuchsia" };
+}
+
+/**
+ * SnapshotRow is one stored snapshot: when it was taken, what it holds and how
+ * big it is, with Restore up front and the rarer actions in a menu.
+ */
+function SnapshotRow({ snapshot: s, onRestore, onBrowse, onDownload, onForget, downloading, forgetting }) {
+  const engine = snapshotEngine(s);
+  const look = snapshotLook(s);
+  const facts = [
+    s.sizeBytes != null ? fmtBytes(s.sizeBytes) : null,
+    s.fileCount != null ? `${fmtCount(s.fileCount)} file${s.fileCount === 1 ? "" : "s"}` : null,
+  ].filter(Boolean);
+
+  return (
+    <li className="flex flex-wrap items-center gap-x-4 gap-y-3 px-5 py-4 transition-colors hover:bg-accent/30 sm:px-6">
+      <IconTile icon={look.icon} tone={look.tone} />
+      <div className="min-w-0 flex-1 basis-56">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="font-medium">{fmtRelative(s.time)}</span>
+            </TooltipTrigger>
+            <TooltipContent>{fmtTime(s.time)}</TooltipContent>
+          </Tooltip>
+          <span className="rounded-md bg-secondary px-1.5 py-0.5 font-mono text-xs text-muted-foreground">
+            {s.shortId || shortId(s.id)}
+          </span>
+          {engine ? (
+            <Badge variant="outline" title={engineLabel(engine)}>
+              <Database className="size-3" />
+              {dumpDatabaseName(s)}
+            </Badge>
+          ) : null}
+          {isSafetySnapshot(s) ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Badge variant="warning">safety copy</Badge>
+              </TooltipTrigger>
+              <TooltipContent>Taken right before a database restore replaced the data</TooltipContent>
+            </Tooltip>
+          ) : null}
+        </div>
+        <p className="mt-1 truncate text-sm text-muted-foreground">
+          {/* Size first: a long path would otherwise push it out of sight. */}
+          {[engine ? `${engineLabel(engine)} dump` : null, ...facts].filter(Boolean).join(" · ")}
+          {!engine && s.paths?.length ? (
+            <span className="font-mono text-[0.8125rem]" title={s.paths.join(", ")}>
+              {facts.length ? " · " : ""}
+              {s.paths.join(", ")}
+            </span>
+          ) : null}
+        </p>
+      </div>
+      <div className="ml-auto flex shrink-0 items-center gap-1.5">
+        <Button variant="outline" size="sm" onClick={onRestore}>
+          <FolderInput />
+          Restore
+        </Button>
+        {engine ? null : (
+          <Button variant="ghost" size="sm" onClick={onBrowse}>
+            <FolderSearch />
+            Browse
+          </Button>
+        )}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={`More actions for snapshot ${s.shortId || shortId(s.id)}`}
+              disabled={downloading || forgetting}
+            >
+              <Ellipsis />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onSelect={onDownload}>
+              <ArrowDownToLine />
+              {downloading ? "Starting…" : "Download as .zip"}
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem variant="destructive" onSelect={onForget}>
+              <Trash2 />
+              {forgetting ? "Starting…" : "Delete snapshot"}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    </li>
   );
 }
 
@@ -201,6 +297,7 @@ export function SnapshotsPanel({
   const [downloadingId, setDownloadingId] = React.useState(null);
   const [forgettingId, setForgettingId] = React.useState(null);
   const [forgettingAll, setForgettingAll] = React.useState(false);
+  const [visible, setVisible] = React.useState(PAGE);
 
   const refresh = React.useCallback(async () => {
     setState((s) => ({ ...s, loading: true }));
@@ -266,11 +363,20 @@ export function SnapshotsPanel({
     return [...list].sort((a, b) => new Date(b.time) - new Date(a.time));
   }, [payload]);
 
+  const shown = snapshots.slice(0, visible);
+
   return (
     <Card>
       <CardHeader>
         <div className="min-w-0 flex-1">
-          <CardTitle>{title}</CardTitle>
+          <CardTitle className="flex items-center gap-2.5">
+            {title}
+            {snapshots.length > 0 ? (
+              <span className="rounded-full bg-secondary px-2 py-0.5 text-xs font-semibold tabular text-muted-foreground">
+                {snapshots.length}
+              </span>
+            ) : null}
+          </CardTitle>
           {description ? <CardDescription className="mt-1">{description}</CardDescription> : null}
         </div>
         <div className="flex flex-wrap gap-2">
@@ -294,19 +400,27 @@ export function SnapshotsPanel({
       </CardHeader>
 
       {state.loading && !payload ? (
-        <div className="space-y-2 px-5 pb-5">
-          <Skeleton className="h-9 w-full" />
-          <Skeleton className="h-9 w-full" />
+        <div className="divide-y divide-border border-t border-border">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="flex items-center gap-4 px-5 py-4 sm:px-6">
+              <Skeleton className="size-10 rounded-xl" />
+              <div className="flex-1 space-y-2">
+                <Skeleton className="h-4 w-40" />
+                <Skeleton className="h-3.5 w-64 max-w-full" />
+              </div>
+            </div>
+          ))}
           {slow ? (
-            <p className="pt-1 text-sm text-muted-foreground">
+            <p className="px-6 py-4 text-sm text-muted-foreground">
               Still waiting for the repository. On slow storage, listing snapshots can take a few minutes.
             </p>
           ) : null}
         </div>
       ) : !payload || !payload.ok ? (
-        <div className="px-5 pb-5">
+        <div className="border-t border-border">
           <EmptyState
             icon={Camera}
+            tone={payload?.code === "not_initialized" ? "cyan" : "warning"}
             title={
               payload?.code === "not_initialized"
                 ? "This repository is not set up yet"
@@ -322,103 +436,51 @@ export function SnapshotsPanel({
           />
         </div>
       ) : snapshots.length === 0 ? (
-        <div className="px-5 pb-5">
+        <div className="border-t border-border">
           <EmptyState
             icon={Camera}
+            tone="cyan"
             title="No snapshots yet"
             description="A snapshot appears here after the first successful backup."
           />
         </div>
       ) : (
-        <div className="border-t border-border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Snapshot</TableHead>
-                <TableHead>Taken</TableHead>
-                <TableHead>Size</TableHead>
-                <TableHead>Files</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {snapshots.map((s) => (
-                <TableRow key={s.id} className="transition-colors hover:bg-accent/40">
-                  <TableCell>
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <Mono>{s.shortId || shortId(s.id)}</Mono>
-                      {snapshotEngine(s) ? (
-                        <Badge variant="outline" title={engineLabel(snapshotEngine(s))}>
-                          <Database className="size-3" />
-                          {dumpDatabaseName(s)}
-                        </Badge>
-                      ) : null}
-                      {isSafetySnapshot(s) ? (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Badge variant="warning">safety copy</Badge>
-                          </TooltipTrigger>
-                          <TooltipContent>Taken right before a database restore replaced the data</TooltipContent>
-                        </Tooltip>
-                      ) : null}
-                    </div>
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap text-muted-foreground">
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <span>{fmtRelative(s.time)}</span>
-                      </TooltipTrigger>
-                      <TooltipContent>{fmtTime(s.time)}</TooltipContent>
-                    </Tooltip>
-                  </TableCell>
-                  <TableCell className="tabular text-muted-foreground">
-                    {s.sizeBytes != null ? fmtBytes(s.sizeBytes) : "—"}
-                  </TableCell>
-                  <TableCell className="tabular text-muted-foreground">
-                    {s.fileCount != null ? fmtCount(s.fileCount) : "—"}
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex justify-end gap-1.5">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => (snapshotEngine(s) ? setRestoringDb(s) : setRestoring(s))}
-                      >
-                        <FolderInput />
-                        Restore
-                      </Button>
-                      {snapshotEngine(s) ? null : (
-                        <Button variant="ghost" size="sm" onClick={() => setBrowsing(s)}>
-                          <FolderSearch />
-                          Browse
-                        </Button>
-                      )}
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => startDownload(s)}
-                        disabled={downloadingId === s.id}
-                      >
-                        <ArrowDownToLine />
-                        {downloadingId === s.id ? "Starting…" : "Download"}
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => startForget(s)}
-                        disabled={forgettingId === s.id}
-                        className="text-muted-foreground hover:text-destructive"
-                      >
-                        <Trash2 />
-                        {forgettingId === s.id ? "Starting…" : "Delete"}
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
+        <>
+          <ul className="divide-y divide-border border-t border-border">
+            {shown.map((s) => (
+              <SnapshotRow
+                key={s.id}
+                snapshot={s}
+                onRestore={() => (snapshotEngine(s) ? setRestoringDb(s) : setRestoring(s))}
+                onBrowse={() => setBrowsing(s)}
+                onDownload={() => startDownload(s)}
+                onForget={() => startForget(s)}
+                downloading={downloadingId === s.id}
+                forgetting={forgettingId === s.id}
+              />
+            ))}
+          </ul>
+          {snapshots.length > PAGE ? (
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-5 py-3 sm:px-6">
+              <p className="text-sm text-muted-foreground">
+                Showing <span className="tabular text-foreground">{shown.length}</span> of{" "}
+                <span className="tabular text-foreground">{snapshots.length}</span>
+              </p>
+              <div className="flex gap-2">
+                {visible > PAGE ? (
+                  <Button variant="ghost" size="sm" onClick={() => setVisible(PAGE)}>
+                    Show fewer
+                  </Button>
+                ) : null}
+                {shown.length < snapshots.length ? (
+                  <Button variant="outline" size="sm" onClick={() => setVisible((v) => v + PAGE)}>
+                    Show {Math.min(PAGE, snapshots.length - shown.length)} more
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+        </>
       )}
 
       {restoring ? (

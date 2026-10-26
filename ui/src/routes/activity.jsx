@@ -1,5 +1,5 @@
 import * as React from "react";
-import { History, RefreshCw } from "lucide-react";
+import { History, Layers, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import {
@@ -10,25 +10,26 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { EmptyState } from "@/components/empty";
+import { EmptyState, ErrorState } from "@/components/empty";
 import { ListPagination } from "@/components/pagination";
 import { Page, PageHeader } from "@/components/page";
 import { ActiveRunsCard } from "@/components/active-runs";
-import { RunHistory } from "@/components/run-history";
+import { KIND_ICON, RunHistory } from "@/components/run-history";
+import { StatusDot } from "@/components/status-badge";
 import { Runs } from "@/lib/api";
 import { PAGE_SIZE } from "@/lib/pagination";
 import { useFetch } from "@/lib/use-fetch";
 import { useLive } from "@/lib/live";
 
 const KIND_FILTERS = [
-  { value: "all", label: "All operations" },
-  { value: "backup", label: "Backups" },
-  { value: "retention", label: "Retention" },
-  { value: "forget", label: "Forget" },
-  { value: "restore", label: "Restores" },
-  { value: "download", label: "Downloads" },
-  { value: "init", label: "Initializations" },
-  { value: "check", label: "Checks" },
+  { value: "all", label: "All operations", icon: Layers },
+  { value: "backup", label: "Backups", icon: KIND_ICON.backup },
+  { value: "retention", label: "Retention", icon: KIND_ICON.retention },
+  { value: "forget", label: "Forget", icon: KIND_ICON.forget },
+  { value: "restore", label: "Restores", icon: KIND_ICON.restore },
+  { value: "download", label: "Downloads", icon: KIND_ICON.download },
+  { value: "init", label: "Initializations", icon: KIND_ICON.init },
+  { value: "check", label: "Checks", icon: KIND_ICON.check },
 ];
 
 const STATUS_FILTERS = [
@@ -53,9 +54,10 @@ export default function ActivityRoute() {
       limit: PAGE_SIZE,
       offset: (page - 1) * PAGE_SIZE,
     });
+    if (!res.ok) throw new Error(res.body?.error || "Could not load the history.");
     return { runs: res.body?.runs || [], total: res.body?.total || 0 };
   }, [kind, status, page]);
-  const { data, loading, reload } = useFetch(loader);
+  const { data, loading, error, reload } = useFetch(loader);
 
   React.useEffect(() => {
     if (runsVersion > 0) reload();
@@ -85,47 +87,64 @@ export default function ActivityRoute() {
         title="Activity"
         description="Everything this app has run. Live state comes from the server, so a refresh, a second tab or coming back tomorrow all show the same thing."
         actions={
-          <Button variant="outline" size="sm" onClick={reload} disabled={loading}>
+          <Button variant="outline" onClick={reload} disabled={loading}>
             <RefreshCw className={loading ? "animate-spin" : undefined} />
             Refresh
           </Button>
         }
       />
 
-      <div className="space-y-4">
+      <div className="space-y-6">
         <ActiveRunsCard runs={activeRuns} />
 
         <Card>
           <CardHeader>
             <div className="min-w-0 flex-1">
-              <CardTitle>History</CardTitle>
+              <CardTitle className="flex items-center gap-2.5">
+                History
+                {data ? (
+                  <span className="rounded-full bg-secondary px-2 py-0.5 text-xs font-semibold tabular text-muted-foreground">
+                    {total}
+                  </span>
+                ) : null}
+              </CardTitle>
               <CardDescription className="mt-1">
                 {total > history.length
                   ? `Page ${page} · ${total} finished operations matching these filters.`
                   : "Every finished operation, newest first."}
               </CardDescription>
             </div>
-            <div className="flex flex-wrap gap-2">
+            <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto">
               <Select value={kind} onValueChange={setKind}>
-                <SelectTrigger className="h-8 w-auto min-w-[9.5rem] text-[13px]">
+                <SelectTrigger className="w-full text-sm sm:w-auto sm:min-w-[11.5rem]" aria-label="Operation">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   {KIND_FILTERS.map((f) => (
                     <SelectItem key={f.value} value={f.value}>
-                      {f.label}
+                      <span className="flex items-center gap-2.5">
+                        <f.icon className="size-4 shrink-0 text-muted-foreground" />
+                        {f.label}
+                      </span>
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
               <Select value={status} onValueChange={setStatus}>
-                <SelectTrigger className="h-8 w-auto min-w-[9rem] text-[13px]">
+                <SelectTrigger className="w-full text-sm sm:w-auto sm:min-w-[10.5rem]" aria-label="Outcome">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   {STATUS_FILTERS.map((f) => (
                     <SelectItem key={f.value} value={f.value}>
-                      {f.label}
+                      <span className="flex items-center gap-2.5">
+                        {f.value === "all" ? (
+                          <span className="size-2 rounded-full border border-muted-foreground/60" />
+                        ) : (
+                          <StatusDot status={f.value} />
+                        )}
+                        {f.label}
+                      </span>
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -134,30 +153,55 @@ export default function ActivityRoute() {
           </CardHeader>
 
           <div className="border-t border-border">
-            {loading && !data ? (
-              <div className="space-y-2 p-5">
-                <Skeleton className="h-8 w-full" />
-                <Skeleton className="h-8 w-full" />
-                <Skeleton className="h-8 w-full" />
-              </div>
-            ) : history.length === 0 ? (
-              <div className="p-5">
-                <EmptyState
-                  icon={History}
-                  title="Nothing here yet"
-                  description={
-                    kind === "all" && status === "all"
-                      ? "Finished backups, restores and downloads are listed here."
-                      : "No finished operations match these filters."
-                  }
+            {error && !data ? (
+              <div className="p-5 sm:p-6">
+                <ErrorState
+                  title="Could not load the history"
+                  description={`${error.message} Check that the server is running, then retry.`}
+                  onRetry={reload}
                 />
               </div>
+            ) : loading && !data ? (
+              <div className="divide-y divide-border">
+                {[0, 1, 2, 3].map((i) => (
+                  <div key={i} className="flex items-center gap-4 px-5 py-4 sm:px-6">
+                    <Skeleton className="size-10 rounded-xl" />
+                    <div className="flex-1 space-y-2">
+                      <Skeleton className="h-4 w-48" />
+                      <Skeleton className="h-3.5 w-72 max-w-full" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : history.length === 0 ? (
+              <EmptyState
+                icon={History}
+                title={kind === "all" && status === "all" ? "Nothing here yet" : "No matches"}
+                description={
+                  kind === "all" && status === "all"
+                    ? "Finished backups, restores and downloads are listed here."
+                    : "No finished operations match these filters."
+                }
+                action={
+                  kind === "all" && status === "all" ? null : (
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        setKind("all");
+                        setStatus("all");
+                      }}
+                    >
+                      Clear filters
+                    </Button>
+                  )
+                }
+              />
             ) : (
-              <RunHistory runs={history} showContext />
+              <RunHistory runs={history} showContext groupByDay />
             )}
           </div>
           {total > PAGE_SIZE ? (
-            <div className="border-t border-border px-4">
+            <div className="border-t border-border px-5 sm:px-6">
               <ListPagination
                 page={page}
                 pageSize={PAGE_SIZE}

@@ -16,18 +16,25 @@ export function Page({ className, children }) {
   );
 }
 
-export function PageHeader({ title, description, actions, breadcrumb, className }) {
+/**
+ * PageHeader titles a screen. Detail screens pass `icon` (an IconTile in the
+ * kind's hue) so a job, a repository or a run is recognisable before it is read.
+ */
+export function PageHeader({ title, description, actions, breadcrumb, icon, className }) {
   return (
     <header className={cn("mb-8 sm:mb-10", className)}>
       {breadcrumb}
       <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-4">
-        <div className="min-w-0 max-w-3xl">
-          <h1 className="display break-words text-2xl font-semibold leading-tight sm:text-3xl">
-            {title}
-          </h1>
-          {description ? (
-            <p className="mt-2.5 text-base text-muted-foreground sm:text-md">{description}</p>
-          ) : null}
+        <div className="flex min-w-0 max-w-3xl items-start gap-4">
+          {icon ? <div className="hidden pt-0.5 sm:block">{icon}</div> : null}
+          <div className="min-w-0">
+            <h1 className="display break-words text-2xl font-semibold leading-tight sm:text-3xl">
+              {title}
+            </h1>
+            {description ? (
+              <div className="mt-2.5 text-base text-muted-foreground sm:text-md">{description}</div>
+            ) : null}
+          </div>
         </div>
         {actions ? <div className="flex flex-wrap items-center gap-2.5">{actions}</div> : null}
       </div>
@@ -87,5 +94,32 @@ export function Mono({ className, children, ...props }) {
     <span className={cn("font-mono text-[0.8125rem] break-all", className)} {...props}>
       {children}
     </span>
+  );
+}
+
+/**
+ * Facts is a short definition list of a thing's settings or outcome, laid out
+ * as a grid of label-over-value pairs. Items with no value are skipped.
+ *
+ * items: [{ label, value, mono?, wide? }]
+ */
+export function Facts({ items, className }) {
+  const shown = items.filter((i) => i && i.value !== undefined && i.value !== null && i.value !== "");
+  return (
+    <dl className={cn("grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-2", className)}>
+      {shown.map((item) => (
+        <div key={item.label} className={cn("min-w-0", item.wide && "sm:col-span-2")}>
+          <dt className="text-sm text-muted-foreground">{item.label}</dt>
+          <dd
+            className={cn(
+              "mt-1 min-w-0 break-words",
+              item.mono ? "font-mono text-[0.8125rem] break-all" : "font-medium",
+            )}
+          >
+            {item.value}
+          </dd>
+        </div>
+      ))}
+    </dl>
   );
 }
