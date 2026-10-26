@@ -582,7 +582,7 @@ export default function Dashboard() {
           {!empty && jobCards.length > 0 ? (
             <Section
               title="Backup jobs"
-              description={`The last ${STRIP_SLOTS} backups of each job, newest on the left.`}
+              description={`The last ${STRIP_SLOTS} backups of each job, newest on the right.`}
               action={<SeeAll to="/jobs">All jobs</SeeAll>}
             >
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
