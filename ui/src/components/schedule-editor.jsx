@@ -1,9 +1,9 @@
 import * as React from "react";
 import { toast } from "sonner";
+import { CalendarClock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -11,6 +11,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { InlineError } from "@/components/empty";
+import { Field, SwitchRow } from "@/components/fields";
 import { Jobs, errorOf } from "@/lib/api";
 import { fmtRelative } from "@/lib/format";
 import {
@@ -95,36 +97,30 @@ export function ScheduleEditor({ job, onSaved }) {
       <CardHeader>
         <div>
           <CardTitle>Automatic backup</CardTitle>
-          <CardDescription className="mt-1">
+          <CardDescription className="mt-1.5">
             Runs this job on a schedule while the app is running. Closing the browser is
             fine; quitting the app is not.
           </CardDescription>
         </div>
       </CardHeader>
       <CardContent>
-        <form onSubmit={onSubmit} className="space-y-4">
-          <label className="flex cursor-pointer items-center justify-between gap-3 rounded-md border border-border px-3 py-2.5">
-            <div>
-              <p className="text-sm font-medium">Enable schedule</p>
-              <p className="text-[13px] text-muted-foreground">
-                {form.enabled
-                  ? describeScheduleTitle(schedulePayload(form)) || "On"
-                  : "Off — run backups manually"}
-              </p>
-            </div>
-            <input
-              type="checkbox"
-              className="size-4 accent-foreground"
-              checked={form.enabled}
-              onChange={(e) => set({ enabled: e.target.checked })}
-              disabled={busy}
-            />
-          </label>
+        <form onSubmit={onSubmit} className="space-y-5">
+          <SwitchRow
+            id={`sched-enabled-${job.id}`}
+            checked={form.enabled}
+            onCheckedChange={(enabled) => set({ enabled })}
+            disabled={busy}
+            title="Enable schedule"
+            description={
+              form.enabled
+                ? describeScheduleTitle(schedulePayload(form)) || "On"
+                : "Off — run backups manually"
+            }
+          />
 
           {form.enabled ? (
             <div className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="sched-kind">How often</Label>
+              <Field label="How often" htmlFor="sched-kind">
                 <Select value={form.kind} onValueChange={(kind) => set({ kind })}>
                   <SelectTrigger id="sched-kind">
                     <SelectValue />
@@ -136,11 +132,10 @@ export function ScheduleEditor({ job, onSaved }) {
                     <SelectItem value="weekly">Weekly</SelectItem>
                   </SelectContent>
                 </Select>
-              </div>
+              </Field>
 
               {form.kind === "every" ? (
-                <div className="space-y-2">
-                  <Label htmlFor="sched-every">Interval</Label>
+                <Field label="Interval" htmlFor="sched-every">
                   <Select value={form.every} onValueChange={(every) => set({ every })}>
                     <SelectTrigger id="sched-every">
                       <SelectValue />
@@ -151,12 +146,11 @@ export function ScheduleEditor({ job, onSaved }) {
                       <SelectItem value="12h">Every 12 hours</SelectItem>
                     </SelectContent>
                   </Select>
-                </div>
+                </Field>
               ) : null}
 
               {form.kind === "daily" || form.kind === "weekly" ? (
-                <div className="space-y-2">
-                  <Label htmlFor="sched-at">Time of day</Label>
+                <Field label="Time of day" htmlFor="sched-at">
                   <Input
                     id="sched-at"
                     type="time"
@@ -164,12 +158,11 @@ export function ScheduleEditor({ job, onSaved }) {
                     onChange={(e) => set({ at: e.target.value })}
                     className="w-40 font-mono"
                   />
-                </div>
+                </Field>
               ) : null}
 
               {form.kind === "weekly" ? (
-                <div className="space-y-2">
-                  <Label>Days</Label>
+                <Field label="Days">
                   <div className="flex flex-wrap gap-1.5">
                     {WEEKDAYS.map((d) => {
                       const on = (form.weekdays || []).includes(d.value);
@@ -179,10 +172,10 @@ export function ScheduleEditor({ job, onSaved }) {
                           type="button"
                           onClick={() => toggleDay(d.value)}
                           className={cn(
-                            "size-9 rounded-md border text-xs font-medium transition-colors",
+                            "size-9 rounded-[10px] border text-sm font-medium transition-colors",
                             on
-                              ? "border-foreground bg-foreground text-background"
-                              : "border-border text-muted-foreground hover:border-input",
+                              ? "border-primary bg-primary text-primary-foreground"
+                              : "border-border bg-card text-muted-foreground hover:border-input hover:text-foreground",
                           )}
                           aria-pressed={on}
                           aria-label={d.label}
@@ -193,7 +186,7 @@ export function ScheduleEditor({ job, onSaved }) {
                       );
                     })}
                   </div>
-                </div>
+                </Field>
               ) : null}
             </div>
           ) : null}
@@ -201,22 +194,19 @@ export function ScheduleEditor({ job, onSaved }) {
           {nextLine && (job.schedule?.enabled || form.enabled) ? (
             <p
               className={cn(
-                "text-[13px]",
+                "flex items-center gap-2 text-sm",
                 state === "overdue" ? "text-warning" : "text-muted-foreground",
               )}
             >
+              <CalendarClock className="size-4 shrink-0" />
               {nextLine}
             </p>
           ) : null}
 
-          {error ? (
-            <p className="rounded-md bg-destructive/10 px-3 py-2 text-[13px] text-destructive">
-              {error}
-            </p>
-          ) : null}
+          <InlineError>{error}</InlineError>
 
           <div className="flex justify-end">
-            <Button type="submit" size="sm" disabled={busy}>
+            <Button type="submit" disabled={busy}>
               {busy ? "Saving…" : "Save schedule"}
             </Button>
           </div>

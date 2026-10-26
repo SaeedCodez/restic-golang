@@ -21,6 +21,7 @@ import { GettingStarted } from "@/components/getting-started";
 import { IconTile, repositoryIcon } from "@/components/kind";
 import { JobCard, STRIP_SLOTS, useJobStrips } from "@/components/job-card";
 import { RunHistory } from "@/components/run-history";
+import { RunStripLegend } from "@/components/run-strip";
 import { StatusBadge } from "@/components/status-badge";
 import { Folders, Jobs, Repositories, Runs, Status } from "@/lib/api";
 import { useFetch } from "@/lib/use-fetch";
@@ -589,7 +590,7 @@ export default function Dashboard() {
                   <JobCard key={job.id} job={job} runs={strips[job.id] || []} />
                 ))}
               </div>
-              <StripLegend />
+              <RunStripLegend />
             </Section>
           ) : null}
 
@@ -612,26 +613,5 @@ export default function Dashboard() {
         </div>
       )}
     </Page>
-  );
-}
-
-/** StripLegend names the colours of the run strip once, below the cards. */
-function StripLegend() {
-  const items = [
-    { label: "Succeeded", fill: "bg-success" },
-    { label: "Warnings", fill: "bg-warning" },
-    { label: "Failed", fill: "bg-destructive" },
-    { label: "Running", fill: "bg-running" },
-    { label: "Stopped", fill: "bg-muted-foreground/45" },
-  ];
-  return (
-    <div className="flex flex-wrap gap-x-5 gap-y-2 text-xs text-muted-foreground">
-      {items.map((i) => (
-        <span key={i.label} className="flex items-center gap-2">
-          <span className={cn("h-3 w-1.5 rounded-full", i.fill)} />
-          {i.label}
-        </span>
-      ))}
-    </div>
   );
 }

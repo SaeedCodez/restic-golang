@@ -2,6 +2,7 @@ import * as React from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import {
+  ArrowUpRight,
   Boxes,
   Check,
   ChevronDown,
@@ -13,6 +14,7 @@ import {
   RefreshCw,
   Search,
   Server,
+  Unplug,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -26,7 +28,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -36,7 +37,9 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { EmptyState } from "@/components/empty";
+import { EmptyState, ErrorState, InlineError } from "@/components/empty";
+import { Callout, CheckOption, Field } from "@/components/fields";
+import { IconTile } from "@/components/kind";
 import { Mono, Page, PageHeader } from "@/components/page";
 import { Docker, Jobs, Repositories, errorOf } from "@/lib/api";
 import { useDockerStatus } from "@/lib/docker";
@@ -120,20 +123,18 @@ function QuickBackupDialog({ target, onOpenChange, repositories, onCreated }) {
           </DialogHeader>
 
           {repositories.length === 0 ? (
-            <p className="rounded-md bg-warning/10 px-3 py-2 text-[13px] text-warning">
-              Add a storage repository first, then come back here.{" "}
-              <Link to="/repositories" className="underline underline-offset-2">
-                Repositories
+            <Callout tone="warning" title="Add a storage repository first">
+              Then come back here.{" "}
+              <Link to="/repositories" className="font-medium underline underline-offset-2">
+                Open Repositories
               </Link>
-            </p>
+            </Callout>
           ) : (
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="quick-name">Job name</Label>
+            <div className="space-y-5">
+              <Field label="Job name" htmlFor="quick-name">
                 <Input id="quick-name" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="quick-repo">Store it in</Label>
+              </Field>
+              <Field label="Store it in" htmlFor="quick-repo">
                 <Select value={repositoryId} onValueChange={setRepositoryId}>
                   <SelectTrigger id="quick-repo">
                     <SelectValue placeholder="Choose a repository" />
@@ -146,37 +147,22 @@ function QuickBackupDialog({ target, onOpenChange, repositories, onCreated }) {
                     ))}
                   </SelectContent>
                 </Select>
-              </div>
-              <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border px-3 py-2.5">
-                <input
-                  type="checkbox"
-                  className="mt-0.5 size-4 accent-foreground"
+              </Field>
+              <div className="space-y-2.5">
+                <CheckOption
                   checked={daily}
-                  onChange={(e) => setDaily(e.target.checked)}
+                  onChange={setDaily}
+                  title="Back up every day"
+                  description="At 02:00. Change the schedule or add retention on the job page."
                 />
-                <span>
-                  <span className="block text-sm font-medium">Back up every day</span>
-                  <span className="block text-[13px] text-muted-foreground">
-                    At 02:00. Change the schedule or add retention on the job page.
-                  </span>
-                </span>
-              </label>
-              <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border px-3 py-2.5">
-                <input
-                  type="checkbox"
-                  className="mt-0.5 size-4 accent-foreground"
+                <CheckOption
                   checked={runNow}
-                  onChange={(e) => setRunNow(e.target.checked)}
+                  onChange={setRunNow}
+                  title="Run the first backup now"
+                  description="Starts as soon as the job is created, so you can check it worked."
                 />
-                <span>
-                  <span className="block text-sm font-medium">Run the first backup now</span>
-                </span>
-              </label>
-              {error ? (
-                <p className="rounded-md bg-destructive/10 px-3 py-2 text-[13px] text-destructive">
-                  {error}
-                </p>
-              ) : null}
+              </div>
+              <InlineError>{error}</InlineError>
             </div>
           )}
 
@@ -198,17 +184,17 @@ function QuickBackupDialog({ target, onOpenChange, repositories, onCreated }) {
 function BackedUp({ jobs }) {
   if (!jobs?.length) return null;
   return (
-    <span className="flex min-w-0 items-center gap-1.5 text-[13px] text-muted-foreground">
+    <span className="flex min-w-0 max-w-full flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
       <Badge variant="success">
         <Check className="size-3" />
         Backed up
       </Badge>
-      <span className="truncate">
+      <span className="min-w-0">
         by{" "}
         {jobs.map((j, i) => (
           <React.Fragment key={j.id}>
             {i > 0 ? ", " : ""}
-            <Link to={`/jobs/${j.id}`} className="text-foreground hover:underline">
+            <Link to={`/jobs/${j.id}`} className="font-medium text-foreground hover:text-primary hover:underline">
               {j.name}
             </Link>
           </React.Fragment>
@@ -218,15 +204,16 @@ function BackedUp({ jobs }) {
   );
 }
 
-function Row({ icon: Icon, title, detail, children, className }) {
+/** Row is one backup-able thing inside a resource: a volume or a database. */
+function Row({ icon, tone = "neutral", title, detail, children, className }) {
   return (
-    <div className={cn("flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5", className)}>
-      <Icon className="size-4 shrink-0 text-muted-foreground" />
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-sm">{title}</div>
-        {detail ? <div className="truncate text-xs text-muted-foreground">{detail}</div> : null}
+    <div className={cn("flex flex-wrap items-center gap-x-4 gap-y-2.5 px-5 py-3.5 sm:px-6", className)}>
+      <IconTile icon={icon} tone={tone} size="sm" />
+      <div className="min-w-0 flex-1 basis-48">
+        <div className="truncate">{title}</div>
+        {detail ? <div className="mt-0.5 truncate text-sm text-muted-foreground">{detail}</div> : null}
       </div>
-      <div className="flex shrink-0 items-center gap-2">{children}</div>
+      <div className="flex min-w-0 shrink-0 items-center gap-2">{children}</div>
     </div>
   );
 }
@@ -236,7 +223,8 @@ function VolumeRow({ resource, volume, onBackup }) {
   return (
     <Row
       icon={FolderOpen}
-      title={<Mono className="text-[13px]">{mounted}</Mono>}
+      tone="fuchsia"
+      title={<Mono>{mounted}</Mono>}
       detail={volume.type === "volume" ? `volume ${volume.name}` : volume.hostPath}
     >
       {volume.jobs?.length ? (
@@ -264,7 +252,10 @@ function VolumeRow({ resource, volume, onBackup }) {
       ) : (
         <Tooltip>
           <TooltipTrigger asChild>
-            <span className="text-[13px] text-muted-foreground">Not reachable</span>
+            <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
+              <Unplug className="size-4" />
+              Not reachable
+            </span>
           </TooltipTrigger>
           <TooltipContent className="max-w-xs">
             This app does not see {volume.hostPath}. Mount it into the restic-web container to back it
@@ -303,33 +294,36 @@ function DatabaseServerRow({ resource, server, onBackup }) {
   return (
     <div>
       <Row
-        icon={Database}
+        icon={Server}
+        tone="fuchsia"
         title={
-          <span className="flex items-center gap-2">
-            {engineLabel(server.engine)}
-            <Mono className="text-muted-foreground">{server.container}</Mono>
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="font-medium">{engineLabel(server.engine)}</span>
+            <Mono className="truncate text-muted-foreground">{server.container}</Mono>
           </span>
         }
         detail={running ? server.image : `${server.state} · ${server.image}`}
       >
-        <Button size="sm" variant="ghost" onClick={toggle} disabled={!running}>
+        <Button size="sm" variant="ghost" onClick={toggle} disabled={!running} aria-expanded={open}>
           {open ? <ChevronDown /> : <ChevronRight />}
-          Databases
+          {open ? "Hide databases" : "Show databases"}
         </Button>
       </Row>
       {open ? (
-        <div className="border-t border-border bg-muted/30 pl-7">
-          {state.loading ? (
-            <div className="space-y-2 px-4 py-3">
-              <Skeleton className="h-6 w-full" />
-            </div>
-          ) : state.error ? (
-            <p className="px-4 py-3 text-[13px] text-destructive">{state.error}</p>
-          ) : state.databases?.length === 0 ? (
-            <p className="px-4 py-3 text-[13px] text-muted-foreground">This server has no databases yet.</p>
-          ) : (
-            (state.databases || []).map((db) => (
-              <Row key={db} icon={Database} title={<Mono className="text-[13px]">{db}</Mono>}>
+        <div className="border-t border-border bg-secondary/40">
+          <div className="ml-9 border-l border-border sm:ml-10">
+            {state.loading ? (
+              <div className="space-y-2 px-5 py-4">
+                <Skeleton className="h-6 w-full" />
+                <Skeleton className="h-6 w-2/3" />
+              </div>
+            ) : state.error ? (
+              <p className="px-5 py-3.5 text-sm text-destructive">{state.error}</p>
+            ) : state.databases?.length === 0 ? (
+              <p className="px-5 py-3.5 text-sm text-muted-foreground">This server has no databases yet.</p>
+            ) : (
+              (state.databases || []).map((db) => (
+              <Row key={db} icon={Database} tone="fuchsia" title={<Mono>{db}</Mono>} className="sm:px-5">
                 {sourceFor(db)?.jobs?.length ? (
                   <BackedUp jobs={sourceFor(db).jobs} />
                 ) : (
@@ -352,8 +346,9 @@ function DatabaseServerRow({ resource, server, onBackup }) {
                   </Button>
                 )}
               </Row>
-            ))
-          )}
+              ))
+            )}
+          </div>
         </div>
       ) : null}
     </div>
@@ -367,9 +362,10 @@ function LinkedDatabaseRow({ resource, link, byKey, onBackup }) {
   return (
     <Row
       icon={Database}
+      tone="fuchsia"
       title={
         <span>
-          Uses database <Mono className="text-[13px]">{link.database}</Mono>
+          Uses database <Mono>{link.database}</Mono>
         </span>
       }
       detail={
@@ -411,38 +407,45 @@ function ResourceCard({ resource, byKey, onBackup }) {
 
   return (
     <Card className="overflow-hidden">
-      <div className="flex flex-wrap items-start gap-3 p-4">
-        <span className="grid size-8 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
-          <Icon className="size-4" />
-        </span>
+      <div className="flex items-start gap-4 p-5 sm:px-6">
+        <IconTile icon={Icon} tone={isCoolifyKind(resource.kind) ? "fuchsia" : "neutral"} />
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <p className="display truncate text-sm font-medium">{resource.name}</p>
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <p className="display min-w-0 truncate text-md font-semibold">{resource.name}</p>
             <Badge variant="outline">{resource.kind}</Badge>
-            {resource.self ? <Badge>This app</Badge> : null}
+            {resource.self ? <Badge variant="running">This app</Badge> : null}
             {stopped.length ? (
               <Badge variant="warning">
                 {stopped.length === resource.containers.length ? "stopped" : `${stopped.length} stopped`}
               </Badge>
             ) : null}
           </div>
-          <p className="mt-0.5 flex flex-wrap gap-x-2 text-[13px] text-muted-foreground">
-            {resource.domains.map((d) => (
-              <a
-                key={d}
-                href={`https://${d}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="hover:text-foreground hover:underline"
-              >
-                {d}
-              </a>
-            ))}
-            {resource.environment ? <span>{resource.environment}</span> : null}
-          </p>
+          {resource.domains.length || resource.environment ? (
+            <p className="mt-1 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
+              {resource.domains.map((d) => (
+                <a
+                  key={d}
+                  href={`https://${d}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex min-w-0 items-center gap-0.5 hover:text-primary"
+                >
+                  <span className="truncate">{d}</span>
+                  <ArrowUpRight className="size-3.5 shrink-0" />
+                </a>
+              ))}
+              {resource.environment ? (
+                <span className="rounded-md bg-secondary px-1.5 py-0.5 text-xs">{resource.environment}</span>
+              ) : null}
+            </p>
+          ) : null}
         </div>
       </div>
-      {nothing ? null : (
+      {nothing ? (
+        <p className="border-t border-border px-5 py-3.5 text-sm text-muted-foreground sm:px-6">
+          No volumes or databases to back up.
+        </p>
+      ) : (
         <div className="divide-y divide-border border-t border-border">
           {files.map((v) => (
             <VolumeRow key={v.hostPath} resource={resource} volume={v} onBackup={onBackup} />
@@ -482,7 +485,8 @@ function matches(resource, q) {
 export default function CoolifyRoute() {
   const docker = useDockerStatus();
   const [query, setQuery] = React.useState("");
-  const [showOther, setShowOther] = React.useState(false);
+  // null until toggled: other containers start open when there is nothing else to show.
+  const [showOther, setShowOther] = React.useState(null);
   const [target, setTarget] = React.useState(null);
 
   const loader = React.useCallback(async () => {
@@ -505,6 +509,7 @@ export default function CoolifyRoute() {
   const q = query.trim().toLowerCase();
   const coolify = resources.filter((r) => isCoolifyKind(r.kind) && matches(r, q));
   const other = resources.filter((r) => !isCoolifyKind(r.kind) && matches(r, q));
+  const otherOpen = showOther ?? coolify.length === 0;
   const projects = React.useMemo(() => {
     const groups = new Map();
     for (const r of coolify) {
@@ -529,31 +534,54 @@ export default function CoolifyRoute() {
       />
 
       {loading && !data ? (
-        <div className="space-y-3">
-          <Skeleton className="h-24 w-full rounded-xl" />
-          <Skeleton className="h-24 w-full rounded-xl" />
+        <div className="space-y-4">
+          <Skeleton className="h-11 w-full rounded-[10px]" />
+          <Skeleton className="h-36 w-full rounded-2xl" />
+          <Skeleton className="h-36 w-full rounded-2xl" />
         </div>
       ) : !data?.ok ? (
-        <EmptyState icon={Server} title="Docker is not reachable" description={data?.error || docker?.message} />
+        <ErrorState
+          title="Docker is not reachable"
+          description={data?.error || docker?.message}
+          onRetry={reload}
+        />
       ) : (
-        <div className="space-y-8">
+        <div className="space-y-10">
           <div className="relative">
-            <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Search className="pointer-events-none absolute top-1/2 left-3.5 size-[18px] -translate-y-1/2 text-muted-foreground" />
             <Input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search sites, domains, projects"
-              className="pl-9"
+              className="h-11 pl-10"
+              aria-label="Search sites, domains and projects"
             />
           </div>
 
           {projects.length === 0 && other.length === 0 ? (
-            <EmptyState icon={Search} title="Nothing matches" description="Try another name or domain." />
+            <EmptyState
+              framed
+              icon={Search}
+              title="Nothing matches"
+              description={q ? `No site, domain or project matches “${query.trim()}”.` : "No containers were found on this host."}
+              action={
+                q ? (
+                  <Button variant="outline" onClick={() => setQuery("")}>
+                    Clear search
+                  </Button>
+                ) : null
+              }
+            />
           ) : null}
 
           {projects.map(([project, list]) => (
-            <section key={project} className="space-y-3">
-              <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">{project}</h2>
+            <section key={project} className="space-y-4">
+              <h2 className="display flex items-center gap-2.5 text-lg font-semibold">
+                {project}
+                <span className="rounded-full bg-secondary px-2 py-0.5 text-xs font-semibold tabular text-muted-foreground">
+                  {list.length}
+                </span>
+              </h2>
               {list.map((r) => (
                 <ResourceCard key={r.key} resource={r} byKey={byKey} onBackup={setTarget} />
               ))}
@@ -561,16 +589,20 @@ export default function CoolifyRoute() {
           ))}
 
           {other.length > 0 ? (
-            <section className="space-y-3">
+            <section className="space-y-4">
               <button
                 type="button"
-                onClick={() => setShowOther((v) => !v)}
-                className="flex items-center gap-1 text-xs font-medium tracking-wide text-muted-foreground uppercase hover:text-foreground"
+                onClick={() => setShowOther(!otherOpen)}
+                aria-expanded={otherOpen}
+                className="display flex items-center gap-2 text-lg font-semibold text-muted-foreground transition-colors hover:text-foreground"
               >
-                {showOther ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
-                Other containers ({other.length})
+                {otherOpen ? <ChevronDown className="size-5" /> : <ChevronRight className="size-5" />}
+                Other containers
+                <span className="rounded-full bg-secondary px-2 py-0.5 text-xs font-semibold tabular">
+                  {other.length}
+                </span>
               </button>
-              {showOther
+              {otherOpen
                 ? other.map((r) => <ResourceCard key={r.key} resource={r} byKey={byKey} onBackup={setTarget} />)
                 : null}
             </section>

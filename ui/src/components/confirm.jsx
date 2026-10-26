@@ -1,4 +1,5 @@
 import * as React from "react";
+import { CircleHelp, TriangleAlert } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -10,6 +11,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { buttonVariants } from "@/components/ui/button";
+import { IconTile } from "@/components/kind";
 import { cn } from "@/lib/utils";
 
 const ConfirmContext = React.createContext(async () => false);
@@ -57,12 +59,18 @@ export function ConfirmProvider({ children }) {
       >
         {state && (
           <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>{state.title}</AlertDialogTitle>
-              {state.description ? (
-                <AlertDialogDescription>{state.description}</AlertDialogDescription>
-              ) : null}
-            </AlertDialogHeader>
+            <div className="flex items-start gap-4">
+              <IconTile
+                icon={state.destructive ? TriangleAlert : CircleHelp}
+                tone={state.destructive ? "destructive" : "brand"}
+              />
+              <AlertDialogHeader className="min-w-0 flex-1 pt-1">
+                <AlertDialogTitle>{state.title}</AlertDialogTitle>
+                {state.description ? (
+                  <AlertDialogDescription>{state.description}</AlertDialogDescription>
+                ) : null}
+              </AlertDialogHeader>
+            </div>
             <AlertDialogFooter>
               <AlertDialogCancel onClick={() => settle(false)}>
                 {state.cancelLabel}

@@ -2,9 +2,9 @@ import * as React from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { AuthLayout } from "@/components/auth-layout";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { InlineError } from "@/components/empty";
+import { Field } from "@/components/fields";
 import { authError, useAuth } from "@/lib/auth";
 
 const MIN_LEN = 6;
@@ -20,6 +20,10 @@ export default function Setup() {
   const [confirm, setConfirm] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState("");
+
+  React.useEffect(() => {
+    document.title = "Set a password · restic backup manager";
+  }, []);
 
   if (loading) {
     return <div className="min-h-dvh bg-background" />;
@@ -57,38 +61,32 @@ export default function Setup() {
       title="Set a login password"
       description="This is the first time the app has been opened. Choose a password to protect access on this machine. You can change it later in Settings."
     >
-      <Card>
-        <CardContent className="pt-5">
-          <form onSubmit={submit} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="setup-password">Password</Label>
-              <Input
-                id="setup-password"
-                type="password"
-                autoComplete="new-password"
-                autoFocus
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder={`at least ${MIN_LEN} characters`}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="setup-confirm">Confirm password</Label>
-              <Input
-                id="setup-confirm"
-                type="password"
-                autoComplete="new-password"
-                value={confirm}
-                onChange={(e) => setConfirm(e.target.value)}
-              />
-            </div>
-            {error ? <p className="text-[13px] text-destructive">{error}</p> : null}
-            <Button type="submit" className="w-full" disabled={busy}>
-              {busy ? "Saving…" : "Save password and continue"}
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
+      <form onSubmit={submit} className="space-y-5">
+        <Field label="Password" htmlFor="setup-password">
+          <Input
+            id="setup-password"
+            type="password"
+            autoComplete="new-password"
+            autoFocus
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder={`at least ${MIN_LEN} characters`}
+          />
+        </Field>
+        <Field label="Confirm password" htmlFor="setup-confirm">
+          <Input
+            id="setup-confirm"
+            type="password"
+            autoComplete="new-password"
+            value={confirm}
+            onChange={(e) => setConfirm(e.target.value)}
+          />
+        </Field>
+        <InlineError>{error}</InlineError>
+        <Button type="submit" size="lg" className="w-full" disabled={busy}>
+          {busy ? "Saving…" : "Save password and continue"}
+        </Button>
+      </form>
     </AuthLayout>
   );
 }

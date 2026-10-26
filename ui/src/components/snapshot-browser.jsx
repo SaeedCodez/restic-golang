@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowDownToLine, ChevronRight, File, Folder, FolderInput } from "lucide-react";
+import { ArrowDownToLine, ChevronRight, File, Folder, FolderInput, HardDrive } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -11,8 +11,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { CheckOption, Field } from "@/components/fields";
 import { Mono } from "@/components/page";
 import { Repositories, errorOf } from "@/lib/api";
 import { useContainersUsing } from "@/lib/docker";
@@ -31,20 +31,31 @@ function commonRoot(snapshot, selected) {
 function Breadcrumbs({ path, onOpen }) {
   const parts = path.split("/").filter(Boolean);
   return (
-    <nav className="flex min-w-0 flex-wrap items-center gap-0.5 font-mono text-xs text-muted-foreground">
-      <button type="button" onClick={() => onOpen("/")} className="rounded px-1 hover:text-foreground">
-        /
+    <nav
+      aria-label="Folder"
+      className="flex min-w-0 flex-wrap items-center gap-0.5 rounded-xl bg-secondary/60 px-2 py-1.5 font-mono text-[0.8125rem] text-muted-foreground"
+    >
+      <button
+        type="button"
+        onClick={() => onOpen("/")}
+        className="flex items-center rounded-md p-1 transition-colors hover:bg-card hover:text-foreground"
+        aria-label="Root folder"
+      >
+        <HardDrive className="size-4" />
       </button>
       {parts.map((part, i) => {
         const to = "/" + parts.slice(0, i + 1).join("/");
         const last = i === parts.length - 1;
         return (
           <React.Fragment key={to}>
-            {i > 0 ? <ChevronRight className="size-3 opacity-50" /> : null}
+            <ChevronRight className="size-3.5 shrink-0 opacity-50" />
             <button
               type="button"
               onClick={() => onOpen(to)}
-              className={cn("rounded px-1 hover:text-foreground", last && "text-foreground")}
+              className={cn(
+                "rounded-md px-1.5 py-0.5 transition-colors hover:bg-card hover:text-foreground",
+                last && "font-medium text-foreground",
+              )}
             >
               {part}
             </button>
@@ -149,25 +160,25 @@ export function SnapshotBrowser({ open, onOpenChange, snapshot, repositoryId, st
               </DialogDescription>
             </DialogHeader>
 
-            <div className="min-w-0 space-y-2">
+            <div className="min-w-0 space-y-3">
               <Breadcrumbs path={path} onOpen={setPath} />
-              <div className="max-h-[50vh] overflow-y-auto rounded-md border border-border scroll-thin">
+              <div className="max-h-[50vh] overflow-y-auto rounded-xl border border-border scroll-thin">
                 {state.loading ? (
-                  <div className="space-y-2 p-3">
-                    <Skeleton className="h-6 w-full" />
-                    <Skeleton className="h-6 w-full" />
-                    <Skeleton className="h-6 w-2/3" />
+                  <div className="space-y-2.5 p-4">
+                    <Skeleton className="h-7 w-full" />
+                    <Skeleton className="h-7 w-full" />
+                    <Skeleton className="h-7 w-2/3" />
                     {slow ? (
-                      <p className="pt-1 text-[13px] text-muted-foreground">
+                      <p className="pt-1 text-sm text-muted-foreground">
                         Reading the snapshot's file list. The first time can take a minute on remote
                         storage; after that, folders open instantly.
                       </p>
                     ) : null}
                   </div>
                 ) : state.error ? (
-                  <p className="p-3 text-[13px] text-destructive">{state.error}</p>
+                  <p className="p-4 text-sm text-destructive">{state.error}</p>
                 ) : state.entries.length === 0 ? (
-                  <p className="p-3 text-[13px] text-muted-foreground">This folder is empty.</p>
+                  <p className="p-4 text-sm text-muted-foreground">This folder is empty.</p>
                 ) : (
                   <ul className="divide-y divide-border">
                     {state.entries.map((e) => {
@@ -175,17 +186,20 @@ export function SnapshotBrowser({ open, onOpenChange, snapshot, repositoryId, st
                       // A path under a selected folder is already included.
                       const covered = [...selected].some((s) => s !== e.path && within(e.path, s));
                       return (
-                        <li key={e.path} className="flex items-center gap-3 px-3 py-1.5 text-[13px] hover:bg-accent/40">
+                        <li
+                          key={e.path}
+                          className="flex items-center gap-3 px-4 py-2.5 text-sm transition-colors hover:bg-accent/40 has-[:checked]:bg-primary/5"
+                        >
                           <input
                             type="checkbox"
-                            className="size-4 accent-foreground"
+                            className="size-4 shrink-0 accent-primary"
                             checked={selected.has(e.path) || covered}
                             disabled={covered}
                             onChange={() => toggle(e.path)}
                             aria-label={`Select ${e.name}`}
                           />
                           {dir ? (
-                            <Folder className="size-4 shrink-0 text-muted-foreground" />
+                            <Folder className="size-4 shrink-0 fill-fuchsia/15 text-fuchsia" />
                           ) : (
                             <File className="size-4 shrink-0 text-muted-foreground" />
                           )}
@@ -193,7 +207,7 @@ export function SnapshotBrowser({ open, onOpenChange, snapshot, repositoryId, st
                             <button
                               type="button"
                               onClick={() => setPath(e.path)}
-                              className="min-w-0 flex-1 truncate text-left hover:underline"
+                              className="min-w-0 flex-1 truncate text-left font-medium hover:text-primary hover:underline"
                             >
                               {e.name}
                             </button>
@@ -215,7 +229,12 @@ export function SnapshotBrowser({ open, onOpenChange, snapshot, repositoryId, st
             </div>
 
             <DialogFooter className="items-center">
-              <span className="mr-auto text-[13px] text-muted-foreground">
+              <span
+                className={cn(
+                  "mr-auto text-sm",
+                  selected.size ? "font-medium text-primary" : "text-muted-foreground",
+                )}
+              >
                 {selected.size ? `${selected.size} selected` : "Nothing selected"}
               </span>
               <Button type="button" variant="outline" onClick={download} disabled={busy || selected.size === 0}>
@@ -238,8 +257,8 @@ export function SnapshotBrowser({ open, onOpenChange, snapshot, repositoryId, st
               </DialogDescription>
             </DialogHeader>
 
-            <div className="space-y-3">
-              <ul className="max-h-32 overflow-y-auto rounded-md border border-border bg-muted/40 px-3 py-2 scroll-thin">
+            <div className="space-y-4">
+              <ul className="max-h-32 space-y-1 overflow-y-auto rounded-xl border border-border bg-secondary/50 px-3.5 py-2.5 scroll-thin">
                 {[...selected].map((p) => (
                   <li key={p}>
                     <Mono>{p}</Mono>
@@ -248,53 +267,37 @@ export function SnapshotBrowser({ open, onOpenChange, snapshot, repositoryId, st
               </ul>
 
               {canInPlace ? (
-                <label className="flex cursor-pointer items-center justify-between gap-3 rounded-md border border-border px-3 py-2.5">
-                  <div>
-                    <p className="text-sm font-medium">Put them back where they were</p>
-                    <p className="text-[13px] text-muted-foreground">
-                      {inPlace ? <>In {root}</> : "Off: restore into the folder below instead"}
-                    </p>
-                  </div>
-                  <input
-                    type="checkbox"
-                    className="size-4 accent-foreground"
-                    checked={inPlace}
-                    onChange={(e) => setInPlace(e.target.checked)}
-                  />
-                </label>
+                <CheckOption
+                  checked={inPlace}
+                  onChange={setInPlace}
+                  title="Put them back where they were"
+                  description={inPlace ? <>In {root}</> : "Off: restore into the folder below instead"}
+                />
               ) : null}
 
               {!inPlace || !canInPlace ? (
-                <div className="space-y-2">
-                  <Label htmlFor="browse-target">Restore into (absolute path)</Label>
+                <Field
+                  label="Restore into (absolute path)"
+                  htmlFor="browse-target"
+                  hint="The snapshot's full paths are recreated under this folder."
+                >
                   <Input
                     id="browse-target"
                     value={target}
                     onChange={(e) => setTarget(e.target.value)}
                     placeholder="/tmp/restored"
-                    className="font-mono text-xs"
+                    className="font-mono text-sm"
                   />
-                  <p className="text-[13px] text-muted-foreground">
-                    The snapshot's full paths are recreated under this folder.
-                  </p>
-                </div>
+                </Field>
               ) : null}
 
               {inPlace && canInPlace && containers.length > 0 ? (
-                <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border px-3 py-2.5">
-                  <input
-                    type="checkbox"
-                    className="mt-0.5 size-4 accent-foreground"
-                    checked={stopSite}
-                    onChange={(e) => setStopSite(e.target.checked)}
-                  />
-                  <span>
-                    <span className="block text-sm font-medium">Stop the site while restoring</span>
-                    <span className="block text-[13px] text-muted-foreground">
-                      {containers.map((c) => c.name).join(", ")} stop first and start again afterwards.
-                    </span>
-                  </span>
-                </label>
+                <CheckOption
+                  checked={stopSite}
+                  onChange={setStopSite}
+                  title="Stop the site while restoring"
+                  description={`${containers.map((c) => c.name).join(", ")} stop first and start again afterwards.`}
+                />
               ) : null}
             </div>
 

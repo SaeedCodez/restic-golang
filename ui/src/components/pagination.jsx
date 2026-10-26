@@ -21,9 +21,9 @@ export function ListPagination({
 
   return (
     <div
-      className={`flex flex-wrap items-center justify-between gap-3 px-1 py-2 ${className}`}
+      className={`flex flex-wrap items-center justify-between gap-3 py-3 ${className}`}
     >
-      <p className="text-[13px] text-muted-foreground">
+      <p className="text-sm text-muted-foreground">
         Showing{" "}
         <span className="tabular text-foreground">
           {from}–{to}
@@ -42,7 +42,7 @@ export function ListPagination({
           <ChevronLeft />
           Previous
         </Button>
-        <span className="tabular text-[13px] text-muted-foreground">
+        <span className="tabular text-sm text-muted-foreground">
           {safePage} / {totalPages}
         </span>
         <Button

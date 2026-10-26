@@ -50,7 +50,7 @@ export function useJobStrips(jobIds, version = 0) {
 }
 
 /** What the last run stored, in one short phrase. */
-function lastRunSummary(run) {
+export function lastRunSummary(run) {
   if (!run) return null;
   if (run.error) return run.error;
   const s = run.summary;
@@ -58,7 +58,7 @@ function lastRunSummary(run) {
   return s.dataAdded ? `${fmtBytes(s.dataAdded)} added` : "nothing changed";
 }
 
-function scheduleText(job) {
+export function scheduleText(job) {
   if (!job.schedule?.enabled) return "Manual only";
   const title = describeScheduleTitle(job.schedule);
   if (job.scheduleState === "overdue") return `Overdue · ${title}`;

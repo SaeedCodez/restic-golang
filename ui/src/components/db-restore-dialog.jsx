@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useNavigate } from "react-router-dom";
-import { TriangleAlert } from "lucide-react";
+import { CopyPlus, RefreshCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Callout, CheckOption, Field, Segmented } from "@/components/fields";
 import {
   Select,
   SelectContent,
@@ -24,7 +25,6 @@ import { Databases, Repositories } from "@/lib/api";
 import { fmtRelative, shortId } from "@/lib/format";
 import { dumpDatabaseName, engineLabel, snapshotEngine } from "@/lib/snapshots";
 import { handleStartResponse } from "@/lib/start-run";
-import { cn } from "@/lib/utils";
 
 /**
  * DbRestoreDialog restores a database dump. Replacing the live database drops
@@ -100,14 +100,12 @@ export function DbRestoreDialog({ open, onOpenChange, snapshot, repositoryId, de
           </DialogHeader>
 
           {sources && sources.length === 0 ? (
-            <p className="rounded-md bg-warning/10 px-3 py-2 text-[13px] text-warning">
-              There is no {engineLabel(engine)} database source to restore into. Add one from the
-              Coolify/Docker page first.
-            </p>
+            <Callout tone="warning" title={`No ${engineLabel(engine)} database to restore into`}>
+              Add one from the Coolify/Docker page first.
+            </Callout>
           ) : (
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="db-restore-source">Database server</Label>
+            <div className="space-y-5">
+              <Field label="Database server" htmlFor="db-restore-source">
                 <Select value={sourceId} onValueChange={setSourceId}>
                   <SelectTrigger id="db-restore-source">
                     <SelectValue placeholder="Choose a database" />
@@ -120,85 +118,61 @@ export function DbRestoreDialog({ open, onOpenChange, snapshot, repositoryId, de
                     ))}
                   </SelectContent>
                 </Select>
-              </div>
+              </Field>
 
-              <div className="flex gap-0.5 rounded-lg bg-muted p-0.5 text-[13px]">
-                {[
-                  ["replace", `Replace ${source?.database || "the database"}`],
-                  ["copy", "Restore as a new database"],
-                ].map(([value, label]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    onClick={() => setMode(value)}
-                    className={cn(
-                      "flex-1 truncate rounded-[6px] px-2.5 py-1.5 transition-colors",
-                      mode === value
-                        ? "bg-background text-foreground dark:bg-accent"
-                        : "text-muted-foreground hover:text-foreground",
-                    )}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
+              <Segmented
+                label="How to restore"
+                value={mode}
+                onChange={setMode}
+                options={[
+                  { value: "replace", label: `Replace ${source?.database || "the database"}`, icon: RefreshCcw },
+                  { value: "copy", label: "As a new database", icon: CopyPlus },
+                ]}
+              />
 
               {mode === "replace" ? (
                 <>
-                  <div className="flex gap-2 rounded-md bg-destructive/10 px-3 py-2.5 text-[13px] text-destructive">
-                    <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-                    <span>
-                      <Mono>{source?.database}</Mono> is replaced by this snapshot: rows and tables added
-                      since it was taken are gone, and apps using it lose their connections for a moment.
-                      {engine === "postgres"
-                        ? " The backup is imported into a temporary database first, so the live one stays untouched until the import is complete."
-                        : ""}
-                    </span>
-                  </div>
+                  <Callout tone="destructive">
+                    <Mono>{source?.database}</Mono> is replaced by this snapshot: rows and tables added
+                    since it was taken are gone, and apps using it lose their connections for a moment.
+                    {engine === "postgres"
+                      ? " The backup is imported into a temporary database first, so the live one stays untouched until the import is complete."
+                      : ""}
+                  </Callout>
                   <div className="space-y-2">
                     <Label htmlFor="db-restore-confirm">
-                      Type <Mono>{source?.database}</Mono> to confirm
+                      Type <Mono className="font-semibold">{source?.database}</Mono> to confirm
                     </Label>
                     <Input
                       id="db-restore-confirm"
                       value={typed}
                       onChange={(e) => setTyped(e.target.value)}
-                      className="font-mono text-xs"
+                      className="font-mono text-sm"
                       autoComplete="off"
                     />
                   </div>
                 </>
               ) : (
-                <div className="space-y-2">
-                  <Label htmlFor="db-restore-into">New database name</Label>
+                <Field
+                  label="New database name"
+                  htmlFor="db-restore-into"
+                  hint="Created on the same server next to the live database, which is not touched. If a database with this name exists, it is replaced."
+                >
                   <Input
                     id="db-restore-into"
                     value={into}
                     onChange={(e) => setInto(e.target.value)}
-                    className="font-mono text-xs"
+                    className="font-mono text-sm"
                   />
-                  <p className="text-[13px] text-muted-foreground">
-                    Created on the same server next to the live database, which is not touched. If a
-                    database with this name exists, it is replaced.
-                  </p>
-                </div>
+                </Field>
               )}
 
-              <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border px-3 py-2.5">
-                <input
-                  type="checkbox"
-                  className="mt-0.5 size-4 accent-foreground"
-                  checked={safety}
-                  onChange={(e) => setSafety(e.target.checked)}
-                />
-                <span>
-                  <span className="block text-sm font-medium">Take a safety backup first</span>
-                  <span className="block text-[13px] text-muted-foreground">
-                    The current database is saved as a snapshot before it is replaced, and put back
-                    automatically if the import fails.
-                  </span>
-                </span>
-              </label>
+              <CheckOption
+                checked={safety}
+                onChange={setSafety}
+                title="Take a safety backup first"
+                description="The current database is saved as a snapshot before it is replaced, and put back automatically if the import fails."
+              />
             </div>
           )}
 
