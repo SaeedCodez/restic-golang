@@ -1,74 +1,103 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+/* Self-hosted so the app never reaches out to a font CDN: it often runs on a
+ * private network, and the build is embedded in the Go binary anyway.
+ * Geist sets headings and big numbers; Mona Sans sets everything you read;
+ * JetBrains Mono sets paths, ids and logs: its tall lowercase and open shapes
+ * keep long paths readable at small sizes. */
+@import "@fontsource-variable/geist/wght.css";
+@import "@fontsource-variable/mona-sans/wght.css";
+@import "@fontsource-variable/jetbrains-mono/wght.css";
 
 /* Dark mode is driven by a class on <html>, set before first paint in index.html. */
 @custom-variant dark (&:is(.dark *));
 
 /*
- * The palette is deliberately monochrome: a neutral grey ramp for every surface,
- * and the *only* hues in the interface are status — green for succeeded, amber
- * for running, red for failed. Because nothing else competes, a colour anywhere
- * on the page means something. The primary action colour is the foreground
- * itself (near-white on dark, near-black on light) rather than a brand blue.
+ * The palette has three layers, and each colour means one thing:
+ *
+ *   - Neutrals: a cool grey ramp for every surface and for text.
+ *   - Status: emerald = succeeded, cobalt = running (the app at work),
+ *     amber = warning / overdue, crimson = failed. Nothing else uses them.
+ *   - Kinds: every kind of thing the app manages has its own hue, used on its
+ *     icon tile wherever it appears: jobs are violet, repositories cyan,
+ *     sources (folders and databases) fuchsia.
+ *
+ * Cobalt doubles as the brand: primary buttons, links, focus and the active
+ * navigation item are all "the app doing something for you".
+ *
+ * Light values are dark enough to read as text on white; dark values are lifted
+ * so they read on near-black without glowing.
  */
 :root {
-  --radius: 0.5rem;
+  --radius: 0.75rem;
 
-  --background: #ffffff;
-  --foreground: #0b0b0c;
-  --card: #ffffff;
-  --card-foreground: #0b0b0c;
-  --popover: #ffffff;
-  --popover-foreground: #0b0b0c;
-  --primary: #121214;
-  --primary-foreground: #fafafa;
-  --secondary: #f4f4f5;
-  --secondary-foreground: #121214;
-  --muted: #f4f4f5;
-  --muted-foreground: #71717a;
-  --accent: #f0f0f1;
-  --accent-foreground: #121214;
-  --destructive: #dc2626;
-  --destructive-foreground: #fafafa;
-  --border: #e7e7ea;
-  --input: #d9d9de;
-  --ring: #a1a1aa;
+  --background: oklch(0.982 0.003 265);
+  --foreground: oklch(0.2 0.018 268);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.2 0.018 268);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.2 0.018 268);
+  --primary: oklch(0.53 0.215 268);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.955 0.006 265);
+  --secondary-foreground: oklch(0.22 0.018 268);
+  --muted: oklch(0.96 0.005 265);
+  --muted-foreground: oklch(0.5 0.018 268);
+  --accent: oklch(0.95 0.008 268);
+  --accent-foreground: oklch(0.2 0.018 268);
+  --destructive: oklch(0.56 0.205 24);
+  --destructive-foreground: oklch(0.99 0 0);
+  --border: oklch(0.915 0.007 265);
+  --input: oklch(0.87 0.009 265);
+  --ring: oklch(0.53 0.215 268);
 
-  --success: #16a34a;
-  --warning: #b45309;
-  --info: #4f46e5;
+  --success: oklch(0.55 0.135 156);
+  --warning: oklch(0.6 0.14 62);
+  --info: oklch(0.53 0.215 268);
+  --running: oklch(0.53 0.215 268);
 
-  --surface: #fafafa;
-  --log-bg: #fafafa;
+  --violet: oklch(0.54 0.21 295);
+  --cyan: oklch(0.58 0.12 220);
+  --fuchsia: oklch(0.56 0.2 345);
+
+  --surface: oklch(0.975 0.004 265);
+  --log-bg: oklch(0.975 0.004 265);
+  --sidebar: oklch(0.975 0.004 265);
 }
 
 .dark {
-  --background: #08080a;
-  --foreground: #ededf0;
-  --card: #0f0f11;
-  --card-foreground: #ededf0;
-  --popover: #151517;
-  --popover-foreground: #ededf0;
-  --primary: #ededf0;
-  --primary-foreground: #09090b;
-  --secondary: #1a1a1e;
-  --secondary-foreground: #ededf0;
-  --muted: #161619;
-  --muted-foreground: #82828c;
-  --accent: #1e1e23;
-  --accent-foreground: #fafafa;
-  --destructive: #fb5c5c;
-  --destructive-foreground: #14090a;
-  --border: #1e1e22;
-  --input: #2a2a30;
-  --ring: #6c6c78;
+  --background: oklch(0.155 0.008 268);
+  --foreground: oklch(0.955 0.005 268);
+  --card: oklch(0.19 0.01 268);
+  --card-foreground: oklch(0.955 0.005 268);
+  --popover: oklch(0.215 0.011 268);
+  --popover-foreground: oklch(0.955 0.005 268);
+  --primary: oklch(0.67 0.17 270);
+  --primary-foreground: oklch(0.15 0.02 270);
+  --secondary: oklch(0.245 0.012 268);
+  --secondary-foreground: oklch(0.955 0.005 268);
+  --muted: oklch(0.225 0.011 268);
+  --muted-foreground: oklch(0.68 0.015 268);
+  --accent: oklch(0.255 0.014 268);
+  --accent-foreground: oklch(0.97 0.004 268);
+  --destructive: oklch(0.7 0.18 22);
+  --destructive-foreground: oklch(0.16 0.03 22);
+  --border: oklch(0.27 0.012 268);
+  --input: oklch(0.33 0.014 268);
+  --ring: oklch(0.67 0.17 270);
 
-  --success: #3ad089;
-  --warning: #f0b34a;
-  --info: #8b93ff;
+  --success: oklch(0.77 0.15 158);
+  --warning: oklch(0.82 0.14 78);
+  --info: oklch(0.67 0.17 270);
+  --running: oklch(0.7 0.16 270);
 
-  --surface: #121215;
-  --log-bg: #0b0b0d;
+  --violet: oklch(0.72 0.16 295);
+  --cyan: oklch(0.78 0.12 215);
+  --fuchsia: oklch(0.74 0.17 345);
+
+  --surface: oklch(0.175 0.009 268);
+  --log-bg: oklch(0.135 0.007 268);
+  --sidebar: oklch(0.135 0.007 268);
 }
 
 @theme inline {
@@ -95,18 +124,50 @@
   --color-success: var(--success);
   --color-warning: var(--warning);
   --color-info: var(--info);
+  --color-running: var(--running);
+  --color-violet: var(--violet);
+  --color-cyan: var(--cyan);
+  --color-fuchsia: var(--fuchsia);
   --color-surface: var(--surface);
   --color-log-bg: var(--log-bg);
+  --color-sidebar: var(--sidebar);
 
-  --radius-sm: calc(var(--radius) - 3px);
-  --radius-md: calc(var(--radius) - 1px);
+  --radius-sm: calc(var(--radius) - 6px);
+  --radius-md: calc(var(--radius) - 3px);
   --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+  --radius-xl: calc(var(--radius) + 2px);
+  --radius-2xl: calc(var(--radius) + 6px);
 
-  --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-    Helvetica, Arial, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
-    "Liberation Mono", monospace;
+  --font-display: "Geist Variable", "Mona Sans Variable", ui-sans-serif, -apple-system,
+    BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-sans: "Mona Sans Variable", ui-sans-serif, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, SFMono-Regular, "SF Mono", Menlo,
+    Consolas, monospace;
+}
+
+/*
+ * The type scale is one notch larger than Tailwind's default, so the whole UI
+ * reads comfortably: body copy is 15px, secondary text 14px, the smallest
+ * labels 13px. Headings use .display for the Geist display face.
+ */
+@theme {
+  --text-xs: 0.8125rem;
+  --text-xs--line-height: 1.25rem;
+  --text-sm: 0.875rem;
+  --text-sm--line-height: 1.375rem;
+  --text-base: 0.9375rem;
+  --text-base--line-height: 1.5rem;
+  --text-md: 1.0625rem;
+  --text-md--line-height: 1.5rem;
+  --text-lg: 1.25rem;
+  --text-lg--line-height: 1.75rem;
+  --text-xl: 1.5rem;
+  --text-xl--line-height: 2rem;
+  --text-2xl: 1.875rem;
+  --text-2xl--line-height: 2.25rem;
+  --text-3xl: 2.375rem;
+  --text-3xl--line-height: 2.75rem;
 }
 
 @layer base {
@@ -119,9 +180,10 @@
   body {
     background-color: var(--background);
     color: var(--foreground);
+    font-size: var(--text-base);
+    line-height: var(--text-base--line-height);
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
-    letter-spacing: -0.006em;
   }
   /* Numbers that update in place (progress, sizes, durations) must not jitter. */
   .tabular {
@@ -130,6 +192,9 @@
   :focus-visible {
     outline: 2px solid var(--ring);
     outline-offset: 2px;
+  }
+  ::selection {
+    background-color: color-mix(in oklch, var(--primary) 22%, transparent);
   }
 }
 
@@ -159,9 +224,11 @@
     border: 3px solid transparent;
     background-clip: content-box;
   }
-  /* Display-weight headings: tighter tracking, so large text does not sprawl. */
+  /* The display voice: Geist, set a little tight. Used for page titles, card
+     titles and the big numbers, nowhere else. */
   .display {
-    letter-spacing: -0.022em;
+    font-family: var(--font-display);
+    letter-spacing: -0.02em;
   }
 }
 
