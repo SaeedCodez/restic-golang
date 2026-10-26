@@ -17,15 +17,37 @@ export const STATUS_LABEL = {
   interrupted: "Interrupted",
 };
 
-/** Badge variant per status — success/warning/destructive/secondary. */
+/** Badge variant per status — success/running/warning/destructive/secondary. */
 export const STATUS_VARIANT = {
-  starting: "warning",
-  running: "warning",
+  starting: "running",
+  running: "running",
   success: "success",
   success_warnings: "warning",
   failed: "destructive",
   interrupted: "destructive",
   canceled: "secondary",
+};
+
+/** Solid fill per status, for dots, bars and the run strip. */
+export const STATUS_FILL = {
+  starting: "bg-running",
+  running: "bg-running",
+  success: "bg-success",
+  success_warnings: "bg-warning",
+  failed: "bg-destructive",
+  interrupted: "bg-destructive",
+  canceled: "bg-muted-foreground/45",
+};
+
+/** Text colour per status, matching STATUS_FILL. */
+export const STATUS_TEXT = {
+  starting: "text-running",
+  running: "text-running",
+  success: "text-success",
+  success_warnings: "text-warning",
+  failed: "text-destructive",
+  interrupted: "text-destructive",
+  canceled: "text-muted-foreground",
 };
 
 /** Phase text shown next to the progress bar on the run screen. */

@@ -11,7 +11,7 @@ const AlertDialogOverlay = React.forwardRef(({ className, ...props }, ref) => (
   <AlertDialogPrimitive.Overlay
     ref={ref}
     className={cn(
-      "fixed inset-0 z-50 bg-black/70 backdrop-blur-[2px]",
+      "fixed inset-0 z-50 bg-black/45 backdrop-blur-[3px] dark:bg-black/65",
       "data-[state=open]:animate-in data-[state=closed]:animate-out",
       "data-[state=open]:fade-in-0 data-[state=closed]:fade-out-0",
       className,
@@ -28,7 +28,7 @@ const AlertDialogContent = React.forwardRef(({ className, ...props }, ref) => (
       ref={ref}
       className={cn(
         "fixed left-1/2 top-1/2 z-50 grid w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2",
-        "gap-4 rounded-lg border border-border bg-popover p-5 shadow-xl shadow-black/20",
+        "gap-5 rounded-2xl border border-border bg-popover p-6 shadow-2xl shadow-black/15 sm:p-7",
         "data-[state=open]:animate-in data-[state=closed]:animate-out",
         "data-[state=open]:fade-in-0 data-[state=closed]:fade-out-0",
         "data-[state=open]:zoom-in-95 data-[state=closed]:zoom-out-95",
@@ -41,13 +41,13 @@ const AlertDialogContent = React.forwardRef(({ className, ...props }, ref) => (
 AlertDialogContent.displayName = AlertDialogPrimitive.Content.displayName;
 
 function AlertDialogHeader({ className, ...props }) {
-  return <div className={cn("flex flex-col gap-1.5", className)} {...props} />;
+  return <div className={cn("flex flex-col gap-2", className)} {...props} />;
 }
 
 function AlertDialogFooter({ className, ...props }) {
   return (
     <div
-      className={cn("flex flex-col-reverse gap-2 sm:flex-row sm:justify-end", className)}
+      className={cn("flex flex-col-reverse gap-2.5 pt-1 sm:flex-row sm:justify-end", className)}
       {...props}
     />
   );
@@ -56,7 +56,7 @@ function AlertDialogFooter({ className, ...props }) {
 const AlertDialogTitle = React.forwardRef(({ className, ...props }, ref) => (
   <AlertDialogPrimitive.Title
     ref={ref}
-    className={cn("text-base font-semibold tracking-tight", className)}
+    className={cn("display text-lg font-semibold leading-tight", className)}
     {...props}
   />
 ));
@@ -65,7 +65,7 @@ AlertDialogTitle.displayName = AlertDialogPrimitive.Title.displayName;
 const AlertDialogDescription = React.forwardRef(({ className, ...props }, ref) => (
   <AlertDialogPrimitive.Description
     ref={ref}
-    className={cn("text-[13px] leading-relaxed text-muted-foreground", className)}
+    className={cn("text-sm text-muted-foreground", className)}
     {...props}
   />
 ));

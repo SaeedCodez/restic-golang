@@ -30,16 +30,16 @@ export function Toaster(props) {
         "--warning-bg": "var(--popover)",
         "--warning-text": "var(--warning)",
         "--warning-border": "var(--border)",
-        "--border-radius": "var(--radius)",
+        "--border-radius": "calc(var(--radius) + 2px)",
       }}
       toastOptions={{
         classNames: {
-          title: "text-sm font-medium",
-          description: "!text-muted-foreground text-[13px] leading-relaxed",
+          title: "text-base font-medium",
+          description: "!text-muted-foreground text-sm",
           actionButton:
-            "!bg-primary !text-primary-foreground !rounded-md !text-xs !font-medium",
+            "!bg-primary !text-primary-foreground !rounded-lg !text-sm !font-medium",
           cancelButton:
-            "!bg-secondary !text-secondary-foreground !rounded-md !text-xs !font-medium",
+            "!bg-secondary !text-secondary-foreground !rounded-lg !text-sm !font-medium",
         },
       }}
       {...props}

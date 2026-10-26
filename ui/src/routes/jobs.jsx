@@ -1,9 +1,8 @@
 import * as React from "react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
-import { ArrowRight, Database, Eye, Play, Plus } from "lucide-react";
+import { Database, FolderOpen, Layers, Plus, Workflow } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import { ListPagination } from "@/components/pagination";
 import { PAGE_SIZE, pageSlice } from "@/lib/pagination";
 import {
@@ -24,154 +23,31 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Progress } from "@/components/ui/progress";
 import { Page, PageHeader } from "@/components/page";
-import { StatusBadge } from "@/components/status-badge";
-import { EmptyState } from "@/components/empty";
+import { EmptyState, ErrorState, InlineError } from "@/components/empty";
+import { FilterTabs } from "@/components/filter-tabs";
+import { JobCard, useJobStrips } from "@/components/job-card";
 import { Databases, Folders, Jobs, Repositories, errorOf } from "@/lib/api";
 import { useFetch } from "@/lib/use-fetch";
-import { useLive, useRunStream } from "@/lib/live";
-import { fmtBytes, fmtRelative } from "@/lib/format";
-import { displayPercent, isActive } from "@/lib/runs";
-import { describeScheduleTitle } from "@/lib/schedule";
-import { handleStartResponse } from "@/lib/start-run";
+import { useLive } from "@/lib/live";
 import { cn } from "@/lib/utils";
 
-/** What the last run stored, in one short phrase. */
-function lastRunSummary(run) {
-  if (!run) return null;
-  if (run.error) return run.error;
-  const s = run.summary;
-  if (!s) return null;
-  return s.dataAdded ? `${fmtBytes(s.dataAdded)} added` : "nothing changed";
-}
+/** The source filter tabs; `kind` matches a job's sourceKind. */
+const SOURCE_FILTERS = [
+  { value: "all", label: "All jobs", icon: Layers },
+  { value: "folder", label: "Files", icon: FolderOpen, tone: "fuchsia" },
+  { value: "database", label: "Databases", icon: Database, tone: "fuchsia" },
+];
 
-/**
- * JobCard answers, at a glance: what does this job back up, where to, and is
- * it healthy?
- *
- * A job that is running right now shows live progress inline — the card
- * subscribes to that run's stream (without replaying its log), so the number
- * moves without having to open the run.
- */
-function JobCard({ job, onRan }) {
-  const navigate = useNavigate();
-  const { activeRuns } = useLive();
-  const [starting, setStarting] = React.useState(false);
-
-  const activeRun = activeRuns.find((r) => r.jobId === job.id);
-  const { run: liveRun } = useRunStream(activeRun?.id, { withLog: false });
-  const live = liveRun || activeRun;
-  const running = Boolean(live && isActive(live.status));
-
-  const last = job.lastRun;
-  const summary = lastRunSummary(last);
-
-  const runNow = async () => {
-    setStarting(true);
-    const res = await Jobs.run(job.id);
-    setStarting(false);
-    handleStartResponse(res, navigate, "Could not start the backup.");
-    onRan?.();
-  };
-
-  return (
-    <Card className="transition-colors hover:border-input">
-      <div className="flex flex-wrap items-start justify-between gap-3 p-4">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <Link
-              to={`/jobs/${job.id}`}
-              className="display truncate text-sm font-medium hover:underline"
-            >
-              {job.name}
-            </Link>
-            {running ? (
-              <StatusBadge status={live.status} />
-            ) : last ? (
-              <StatusBadge status={last.status} />
-            ) : (
-              <span className="text-xs text-muted-foreground">never run</span>
-            )}
-          </div>
-
-          <div className="mt-1.5 flex items-center gap-2 font-mono text-xs text-muted-foreground">
-            {job.sourceKind === "database" ? <Database className="size-3 shrink-0 opacity-60" /> : null}
-            <span className="max-w-fit flex-1 truncate" title={job.sourceLabel}>
-              {job.sourceLabel || job.folderPath || job.folderName || "?"}
-            </span>
-            <ArrowRight className="size-3 shrink-0 opacity-60" />
-            {/* The repository name keeps its full width; the long path gives way. */}
-            <span className="shrink-0 truncate">{job.repoName || "?"}</span>
-          </div>
-
-          {!running && last ? (
-            <p className="mt-2 text-[13px] text-muted-foreground">
-              Last run {fmtRelative(last.startedAt)}
-              {summary ? (
-                <>
-                  {" · "}
-                  <span className={last.error ? "text-destructive" : undefined}>{summary}</span>
-                </>
-              ) : null}
-            </p>
-          ) : null}
-
-          {job.schedule?.enabled ? (
-            <p
-              className={cn(
-                "mt-1.5 text-[13px]",
-                job.scheduleState === "overdue" ? "text-warning" : "text-muted-foreground",
-              )}
-            >
-              {job.scheduleState === "overdue"
-                ? `Overdue · ${describeScheduleTitle(job.schedule)}`
-                : job.nextDueAt
-                  ? `${describeScheduleTitle(job.schedule)} · next ${fmtRelative(job.nextDueAt)}`
-                  : describeScheduleTitle(job.schedule)}
-            </p>
-          ) : null}
-        </div>
-
-        <div className="flex shrink-0 items-center gap-2">
-          <Button size="sm" asChild>
-            <Link to={`/jobs/${job.id}`}>
-              <Eye />
-              View job
-            </Link>
-          </Button>
-          {running ? (
-            <Button variant="secondary" size="sm" asChild>
-              <Link to={`/runs/${live.id}`}>View progress</Link>
-            </Button>
-          ) : (
-            <Button variant="secondary" size="sm" onClick={runNow} disabled={starting}>
-              <Play />
-              {starting ? "Starting…" : "Run backup"}
-            </Button>
-          )}
-        </div>
-      </div>
-
-      {running ? (
-        <div className="space-y-1.5 border-t border-border px-4 py-3">
-          <div className="flex items-baseline justify-between gap-3 text-[13px]">
-            <span className="truncate font-mono text-xs text-muted-foreground">
-              {live.progress?.currentFile || "working…"}
-            </span>
-            <span className="tabular font-medium">{Math.round(displayPercent(live))}%</span>
-          </div>
-          <Progress
-            value={displayPercent(live)}
-            indeterminate={displayPercent(live) === 0 && !live.progress?.totalBytes}
-          />
-        </div>
-      ) : null}
-    </Card>
-  );
-}
-
-function NewJobDialog({ open, onOpenChange, folders, databases, repositories, onCreated }) {
+function NewJobDialog({
+  open,
+  onOpenChange,
+  folders,
+  databases,
+  repositories,
+  preferKind,
+  onCreated,
+}) {
   const [name, setName] = React.useState("");
   const [kind, setKind] = React.useState("folder");
   const [folderId, setFolderId] = React.useState("");
@@ -186,11 +62,13 @@ function NewJobDialog({ open, onOpenChange, folders, databases, repositories, on
     setName("");
     setError("");
     setAutoDaily(false);
-    setKind(folders.length === 0 && databases.length > 0 ? "database" : "folder");
+    // Opened from the Databases tab, the dialog starts on a database.
+    const wantDb = preferKind === "database" ? databases.length > 0 : folders.length === 0;
+    setKind(wantDb && databases.length > 0 ? "database" : "folder");
     setFolderId(folders[0]?.id || "");
     setDatabaseId(databases[0]?.id || "");
     setRepositoryId(repositories[0]?.id || "");
-  }, [open, folders, databases, repositories]);
+  }, [open, folders, databases, repositories, preferKind]);
 
   const sourceId = kind === "database" ? databaseId : folderId;
 
@@ -239,22 +117,23 @@ function NewJobDialog({ open, onOpenChange, folders, databases, repositories, on
             </div>
 
             {databases.length > 0 ? (
-              <div className="flex gap-0.5 rounded-lg bg-muted p-0.5 text-[13px]">
+              <div className="flex gap-1 rounded-xl bg-secondary p-1 text-sm">
                 {[
-                  ["folder", "A folder"],
-                  ["database", "A database"],
-                ].map(([value, label]) => (
+                  ["folder", "A folder", FolderOpen],
+                  ["database", "A database", Database],
+                ].map(([value, label, Icon]) => (
                   <button
                     key={value}
                     type="button"
                     onClick={() => setKind(value)}
                     className={cn(
-                      "flex-1 rounded-[6px] px-2.5 py-1.5 transition-colors",
+                      "flex h-9 flex-1 items-center justify-center gap-2 rounded-lg px-3 font-medium transition-colors",
                       kind === value
-                        ? "bg-background text-foreground dark:bg-accent"
+                        ? "bg-card text-foreground shadow-[0_1px_2px_rgb(0_0_0/0.08)]"
                         : "text-muted-foreground hover:text-foreground",
                     )}
                   >
+                    <Icon className={cn("size-4", kind === value && "text-fuchsia")} />
                     {label}
                   </button>
                 ))}
@@ -311,27 +190,23 @@ function NewJobDialog({ open, onOpenChange, folders, databases, repositories, on
               </Select>
             </div>
 
-            <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border px-3 py-2.5">
+            <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-border px-4 py-3.5 transition-colors hover:bg-accent/50 has-[:checked]:border-primary/40 has-[:checked]:bg-primary/5">
               <input
                 type="checkbox"
-                className="mt-0.5 size-4 accent-foreground"
+                className="mt-0.5 size-4 accent-primary"
                 checked={autoDaily}
                 onChange={(e) => setAutoDaily(e.target.checked)}
               />
               <span>
-                <span className="block text-sm font-medium">Also run automatically</span>
-                <span className="block text-[13px] text-muted-foreground">
+                <span className="block font-medium">Also run automatically</span>
+                <span className="mt-0.5 block text-sm text-muted-foreground">
                   Daily at 02:00 while the app is running. You can change this later on the job
                   page.
                 </span>
               </span>
             </label>
 
-            {error ? (
-              <p className="rounded-md bg-destructive/10 px-3 py-2 text-[13px] text-destructive">
-                {error}
-              </p>
-            ) : null}
+            <InlineError>{error}</InlineError>
           </div>
 
           <DialogFooter>
@@ -354,6 +229,14 @@ export default function JobsRoute() {
   const navigate = useNavigate();
   const [dialogOpen, setDialogOpen] = React.useState(false);
   const [page, setPage] = React.useState(1);
+  // The source filter lives in the URL, so back/forward and reloads keep it.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const sourceParam = searchParams.get("source");
+  const source = SOURCE_FILTERS.some((f) => f.value === sourceParam) ? sourceParam : "all";
+  const setSource = (v) => {
+    setSearchParams(v === "all" ? {} : { source: v }, { replace: true });
+    setPage(1);
+  };
 
   const loader = React.useCallback(async () => {
     const [jobsR, foldersR, dbsR, reposR] = await Promise.all([
@@ -362,6 +245,7 @@ export default function JobsRoute() {
       Databases.list(),
       Repositories.list(),
     ]);
+    if (!jobsR.ok) throw new Error(errorOf(jobsR, "Could not load jobs."));
     return {
       jobs: jobsR.body?.jobs || [],
       folders: foldersR.body?.folders || [],
@@ -369,7 +253,7 @@ export default function JobsRoute() {
       repositories: reposR.body?.repositories || [],
     };
   }, []);
-  const { data, loading, reload } = useFetch(loader);
+  const { data, loading, error, reload } = useFetch(loader);
 
   // A run finishing anywhere changes a job's health, so refresh on run events.
   React.useEffect(() => {
@@ -394,7 +278,17 @@ export default function JobsRoute() {
   const databases = data?.databases || [];
   const repositories = data?.repositories || [];
   const canCreate = (folders.length > 0 || databases.length > 0) && repositories.length > 0;
-  const paged = pageSlice(jobs, page, PAGE_SIZE);
+  const filtered = source === "all" ? jobs : jobs.filter((j) => j.sourceKind === source);
+  const counts = {
+    all: jobs.length,
+    folder: jobs.filter((j) => j.sourceKind === "folder").length,
+    database: jobs.filter((j) => j.sourceKind === "database").length,
+  };
+  const paged = pageSlice(filtered, page, PAGE_SIZE);
+  const strips = useJobStrips(
+    paged.items.map((j) => j.id),
+    runsVersion,
+  );
 
   React.useEffect(() => {
     if (page !== paged.page) setPage(paged.page);
@@ -415,14 +309,23 @@ export default function JobsRoute() {
         }
       />
 
-      {loading && !data ? (
-        <div className="space-y-3">
-          <Skeleton className="h-24 w-full rounded-xl" />
-          <Skeleton className="h-24 w-full rounded-xl" />
+      {error && !data ? (
+        <ErrorState
+          title="Could not load jobs"
+          description={`${error.message} Check that the server is running, then retry.`}
+          onRetry={reload}
+        />
+      ) : loading && !data ? (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          {[0, 1, 2, 3].map((i) => (
+            <Skeleton key={i} className="h-[248px] rounded-2xl" />
+          ))}
         </div>
       ) : jobs.length === 0 ? (
         <EmptyState
-          icon={Play}
+          framed
+          icon={Workflow}
+          tone="violet"
           title="No jobs yet"
           description={
             canCreate
@@ -443,10 +346,27 @@ export default function JobsRoute() {
           }
         />
       ) : (
-        <div className="space-y-3">
-          {paged.items.map((job) => (
-            <JobCard key={job.id} job={job} onRan={reload} />
-          ))}
+        <div className="space-y-6">
+          <FilterTabs
+            label="Filter jobs by source"
+            value={source}
+            onChange={setSource}
+            options={SOURCE_FILTERS.map((f) => ({ ...f, count: counts[f.value] }))}
+          />
+          {filtered.length === 0 ? (
+            <FilteredEmpty
+              source={source}
+              hasSource={source === "database" ? databases.length > 0 : folders.length > 0}
+              canCreate={canCreate}
+              onCreate={() => setDialogOpen(true)}
+            />
+          ) : (
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              {paged.items.map((job) => (
+                <JobCard key={job.id} job={job} runs={strips[job.id] || []} actions onRan={reload} />
+              ))}
+            </div>
+          )}
           <ListPagination
             page={paged.page}
             pageSize={PAGE_SIZE}
@@ -462,8 +382,43 @@ export default function JobsRoute() {
         folders={folders}
         databases={databases}
         repositories={repositories}
+        preferKind={source}
         onCreated={reload}
       />
     </Page>
+  );
+}
+
+/** FilteredEmpty is the empty state for a source tab that has no jobs in it. */
+function FilteredEmpty({ source, hasSource, canCreate, onCreate }) {
+  const db = source === "database";
+  return (
+    <EmptyState
+      framed
+      icon={db ? Database : FolderOpen}
+      tone="fuchsia"
+      title={db ? "No database jobs yet" : "No file jobs yet"}
+      description={
+        hasSource
+          ? db
+            ? "Create a job and choose “A database” to back one up on its own schedule."
+            : "Create a job and choose a folder to back it up on its own schedule."
+          : db
+            ? "A database job dumps one PostgreSQL, MySQL or MariaDB database. Add the database on the Sources page first."
+            : "A file job backs up one folder. Add the folder on the Sources page first."
+      }
+      action={
+        hasSource && canCreate ? (
+          <Button onClick={onCreate}>
+            <Plus />
+            New job
+          </Button>
+        ) : (
+          <Button variant="outline" asChild>
+            <Link to="/folders">Open Sources</Link>
+          </Button>
+        )
+      }
+    />
   );
 }

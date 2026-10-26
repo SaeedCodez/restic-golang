@@ -1,30 +1,39 @@
 import * as React from "react";
 import { Link } from "react-router-dom";
 import {
-  AlertTriangle,
-  FolderOpen,
-  HardDrive,
-  Play,
+  ArrowUpRight,
   CalendarClock,
+  CircleDashed,
+  Clock,
+  FolderOpen,
+  ShieldAlert,
+  ShieldCheck,
+  Vault,
+  Workflow,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Page, PageHeader } from "@/components/page";
+import { Page, PageHeader, Section, SeeAll } from "@/components/page";
 import { ActiveRunsCard } from "@/components/active-runs";
+import { ErrorState } from "@/components/empty";
 import { GettingStarted } from "@/components/getting-started";
+import { IconTile, repositoryIcon } from "@/components/kind";
+import { JobCard, STRIP_SLOTS, useJobStrips } from "@/components/job-card";
 import { RunHistory } from "@/components/run-history";
 import { StatusBadge } from "@/components/status-badge";
 import { Folders, Jobs, Repositories, Runs, Status } from "@/lib/api";
 import { useFetch } from "@/lib/use-fetch";
 import { useLive } from "@/lib/live";
-import { fmtRelative } from "@/lib/format";
+import { fmtRelative, repoLocation } from "@/lib/format";
 import { describeScheduleTitle } from "@/lib/schedule";
 import { cn } from "@/lib/utils";
 
 const ATTENTION_CAP = 5;
 const UPCOMING_CAP = 5;
 const FAILURES_CAP = 5;
+const JOB_CARDS_CAP = 6;
+const LATEST_CAP = 6;
 
 function lastRunSummary(run) {
   if (!run) return null;
@@ -66,62 +75,144 @@ export function selectUpcoming(jobs) {
     .slice(0, UPCOMING_CAP);
 }
 
-function InventoryStrip({ repoCount, folderCount, jobCount, scheduledCount }) {
-  const tiles = [
-    { label: "Repositories", value: repoCount, to: "/repositories", icon: HardDrive },
-    { label: "Sources", value: folderCount, to: "/folders", icon: FolderOpen },
-    { label: "Jobs", value: jobCount, to: "/jobs", icon: Play },
-    { label: "Scheduled", value: scheduledCount, to: "/jobs", icon: CalendarClock },
+/** Job cards lead with the ones that need attention, then the most recently run. */
+function orderJobCards(jobs, attention) {
+  const rank = new Map(attention.map((a, i) => [a.job.id, i]));
+  return jobs.slice().sort((a, b) => {
+    const ra = rank.has(a.id) ? rank.get(a.id) : Infinity;
+    const rb = rank.has(b.id) ? rank.get(b.id) : Infinity;
+    if (ra !== rb) return ra - rb;
+    const ta = a.lastRun?.startedAt ? new Date(a.lastRun.startedAt).getTime() : 0;
+    const tb = b.lastRun?.startedAt ? new Date(b.lastRun.startedAt).getTime() : 0;
+    return tb - ta;
+  });
+}
+
+const HEALTH_TONE = {
+  destructive: "border-destructive/30 bg-destructive/6",
+  warning: "border-warning/35 bg-warning/7",
+  success: "border-success/30 bg-success/6",
+  neutral: "",
+};
+
+/**
+ * HealthHero answers the one question the dashboard exists for — are my
+ * backups OK? — in a sentence, coloured by the answer.
+ */
+function HealthHero({ jobs, attention, strips, upcoming, running }) {
+  const failed = attention.filter((a) => a.failedLast).length;
+  const overdue = attention.filter((a) => a.overdue).length;
+  const neverRun = jobs.filter((j) => !j.lastRun).length;
+
+  let lastBackup = null;
+  for (const runs of Object.values(strips)) {
+    const done = runs.find((r) => r.status === "success" || r.status === "success_warnings");
+    if (done && (!lastBackup || new Date(done.startedAt) > new Date(lastBackup.startedAt))) {
+      lastBackup = done;
+    }
+  }
+  const next = upcoming.find((j) => j.nextDueAt && j.scheduleState !== "overdue");
+
+  let tone, icon, headline, detail;
+  if (failed > 0) {
+    tone = "destructive";
+    icon = ShieldAlert;
+    headline = `${failed} job${failed === 1 ? " needs" : "s need"} attention`;
+    detail = `The last run ${failed === 1 ? "of this job" : "of these jobs"} failed or was interrupted.${
+      overdue > 0 ? ` ${overdue} scheduled backup${overdue === 1 ? " is" : "s are"} overdue as well.` : ""
+    }`;
+  } else if (overdue > 0) {
+    tone = "warning";
+    icon = Clock;
+    headline = `${overdue} scheduled backup${overdue === 1 ? " is" : "s are"} overdue`;
+    detail = "They missed their last slot. They run as soon as the repository is free.";
+  } else if (neverRun === jobs.length) {
+    tone = "neutral";
+    icon = CircleDashed;
+    headline = "No backups have run yet";
+    detail = "Open a job and run it once to take the first snapshot.";
+  } else {
+    tone = "success";
+    icon = ShieldCheck;
+    headline = "All backups are healthy";
+    detail =
+      neverRun > 0
+        ? `Every job that has run succeeded. ${neverRun} job${neverRun === 1 ? " has" : "s have"} not run yet.`
+        : "The last run of every job succeeded.";
+  }
+
+  const facts = [
+    {
+      label: "Last backup",
+      value: lastBackup ? fmtRelative(lastBackup.startedAt) : "—",
+      sub: lastBackup?.jobName,
+    },
+    {
+      label: "Next backup",
+      value: next ? fmtRelative(next.nextDueAt) : "—",
+      sub: next ? next.name : "No schedules",
+    },
+    {
+      label: running > 0 ? "Running now" : "Healthy jobs",
+      value: running > 0 ? `${running}` : `${jobs.length - failed} of ${jobs.length}`,
+      sub: running > 0 ? "live" : null,
+    },
   ];
 
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-      {tiles.map(({ label, value, to, icon: Icon }) => (
-        <Link key={label} to={to} className="group">
-          <Card className="h-full transition-colors hover:border-input">
-            <div className="flex flex-col gap-1 px-4 py-3.5">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-[13px] text-muted-foreground">{label}</span>
-                <Icon className="size-3.5 text-muted-foreground/60 transition-colors group-hover:text-muted-foreground" />
-              </div>
-              <span className="display text-2xl font-medium tabular tracking-tight">{value}</span>
-            </div>
-          </Card>
-        </Link>
-      ))}
-    </div>
+    <Card className={cn("overflow-hidden", HEALTH_TONE[tone])}>
+      <div className="flex items-start gap-4 p-5 sm:items-center sm:gap-5 sm:p-7">
+        <IconTile icon={icon} tone={tone} size="lg" />
+        <div className="min-w-0">
+          <h2 className="display text-xl font-semibold leading-tight sm:text-2xl">{headline}</h2>
+          <p className="mt-1.5 text-base text-muted-foreground">{detail}</p>
+        </div>
+      </div>
+      <dl className="grid grid-cols-1 border-t border-inherit sm:grid-cols-3">
+        {facts.map((f, i) => (
+          <div
+            key={f.label}
+            className={cn(
+              "flex min-w-0 items-baseline justify-between gap-4 px-5 py-3.5 sm:block sm:px-7 sm:py-4",
+              i > 0 && "border-t border-inherit sm:border-l sm:border-t-0",
+            )}
+          >
+            <dt className="shrink-0 text-sm text-muted-foreground">{f.label}</dt>
+            <dd className="min-w-0 text-right sm:mt-1 sm:text-left">
+              <span className="display tabular block truncate font-semibold sm:text-lg">{f.value}</span>
+              {f.sub ? (
+                <span className="hidden truncate text-sm text-muted-foreground sm:block">{f.sub}</span>
+              ) : null}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </Card>
   );
 }
 
-function HealthBanner({ attention }) {
-  const failedCount = attention.filter((a) => a.failedLast).length;
-  const overdueCount = attention.filter((a) => a.overdue).length;
-  const parts = [];
-  if (failedCount > 0) {
-    parts.push(
-      `${failedCount} job${failedCount === 1 ? "" : "s"} need${failedCount === 1 ? "s" : ""} attention after their last run`,
-    );
-  }
-  if (overdueCount > 0) {
-    parts.push(
-      `${overdueCount} scheduled backup${overdueCount === 1 ? "" : "s"} overdue`,
-    );
-  }
-  if (parts.length === 0) return null;
-
-  const destructive = failedCount > 0;
+function InventoryStrip({ repoCount, folderCount, jobCount, scheduledCount }) {
+  const tiles = [
+    { label: "Repositories", value: repoCount, to: "/repositories", icon: Vault, tone: "cyan" },
+    { label: "Sources", value: folderCount, to: "/folders", icon: FolderOpen, tone: "fuchsia" },
+    { label: "Jobs", value: jobCount, to: "/jobs", icon: Workflow, tone: "violet" },
+    { label: "Scheduled", value: scheduledCount, to: "/jobs", icon: CalendarClock, tone: "brand" },
+  ];
 
   return (
-    <div
-      className={cn(
-        "flex items-start gap-2.5 rounded-lg border px-4 py-3 text-[13px]",
-        destructive
-          ? "border-destructive/30 bg-destructive/10 text-destructive"
-          : "border-warning/30 bg-warning/10 text-warning",
-      )}
-    >
-      <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-      <p className="min-w-0 font-medium leading-relaxed">{parts.join(" · ")}</p>
+    <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-4">
+      {tiles.map(({ label, value, to, icon, tone }) => (
+        <Link key={label} to={to} className="group rounded-2xl">
+          <Card className="h-full p-4 transition-colors group-hover:border-input sm:p-5">
+            <div className="flex items-start justify-between">
+              <IconTile icon={icon} tone={tone} />
+              <ArrowUpRight className="size-4 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+            </div>
+            <p className="display tabular mt-4 text-2xl font-semibold leading-none sm:text-3xl">{value}</p>
+            <p className="mt-1.5 truncate text-sm text-muted-foreground">{label}</p>
+          </Card>
+        </Link>
+      ))}
     </div>
   );
 }
@@ -148,49 +239,48 @@ function AttentionCard({ attention }) {
             <Link
               key={job.id}
               to={`/jobs/${job.id}`}
-              className="block px-5 py-3.5 transition-colors hover:bg-accent/40"
+              className="flex items-start gap-4 px-6 py-4 transition-colors hover:bg-accent/50"
             >
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex min-w-0 flex-wrap items-center gap-2">
-                  <span className="truncate text-sm font-medium">{job.name}</span>
+              <IconTile
+                icon={failedLast ? ShieldAlert : Clock}
+                tone={failedLast ? "destructive" : "warning"}
+                size="sm"
+                className="mt-0.5"
+              />
+              <div className="min-w-0 flex-1">
+                <div className="flex min-w-0 flex-wrap items-center gap-2.5">
+                  <span className="truncate font-medium">{job.name}</span>
                   {failedLast && last ? (
                     <StatusBadge status={last.status} />
                   ) : overdue ? (
-                    <span className="rounded-full bg-warning/15 px-2 py-0.5 text-[11px] font-medium text-warning">
+                    <span className="rounded-full bg-warning/14 px-2.5 py-0.5 text-xs font-medium text-warning">
                       Overdue
                     </span>
                   ) : null}
                 </div>
+                <p className="mt-1 truncate text-sm text-muted-foreground">
+                  {failedLast && last ? (
+                    <>
+                      Last run {fmtRelative(last.startedAt)}
+                      {summary ? (
+                        <>
+                          {" · "}
+                          <span className="text-destructive">{summary}</span>
+                        </>
+                      ) : null}
+                    </>
+                  ) : overdue ? (
+                    describeScheduleTitle(job.schedule)
+                  ) : null}
+                </p>
               </div>
-              <p className="mt-1 truncate text-[13px] text-muted-foreground">
-                {failedLast && last ? (
-                  <>
-                    Last run {fmtRelative(last.startedAt)}
-                    {summary ? (
-                      <>
-                        {" · "}
-                        <span className="text-destructive">{summary}</span>
-                      </>
-                    ) : null}
-                  </>
-                ) : overdue ? (
-                  describeScheduleTitle(job.schedule)
-                ) : null}
-              </p>
             </Link>
           );
         })}
       </div>
-      {more > 0 || attention.length > 0 ? (
-        <CardFooter>
-          <Link
-            to="/jobs"
-            className="text-[13px] text-muted-foreground hover:text-foreground hover:underline"
-          >
-            {more > 0 ? `View all jobs (${more} more) →` : "View all jobs →"}
-          </Link>
-        </CardFooter>
-      ) : null}
+      <CardFooter>
+        <SeeAll to="/jobs">{more > 0 ? `View all jobs (${more} more)` : "View all jobs"}</SeeAll>
+      </CardFooter>
     </Card>
   );
 }
@@ -210,12 +300,26 @@ function RecentFailuresCard({ runs }) {
         <RunHistory runs={runs} showContext />
       </div>
       <CardFooter>
-        <Link
-          to="/activity"
-          className="text-[13px] text-muted-foreground hover:text-foreground hover:underline"
-        >
-          Open Activity →
-        </Link>
+        <SeeAll to="/activity">Open Activity</SeeAll>
+      </CardFooter>
+    </Card>
+  );
+}
+
+function LatestRunsCard({ runs }) {
+  return (
+    <Card>
+      <CardHeader>
+        <div className="min-w-0 flex-1">
+          <CardTitle>Latest runs</CardTitle>
+          <CardDescription className="mt-1">Every kind of operation, newest first.</CardDescription>
+        </div>
+      </CardHeader>
+      <div className="border-t border-border">
+        <RunHistory runs={runs} showContext emptyMessage="Finished operations appear here." />
+      </div>
+      <CardFooter>
+        <SeeAll to="/activity">All activity</SeeAll>
       </CardFooter>
     </Card>
   );
@@ -231,49 +335,70 @@ function UpcomingCard({ jobs }) {
         </div>
       </CardHeader>
       <div className="divide-y divide-border border-t border-border">
-        {jobs.map((job) => (
-          <Link
-            key={job.id}
-            to={`/jobs/${job.id}`}
-            className="flex flex-wrap items-center justify-between gap-2 px-5 py-3.5 transition-colors hover:bg-accent/40"
-          >
-            <div className="min-w-0">
-              <p className="truncate text-sm font-medium">{job.name}</p>
-              <p
+        {jobs.map((job) => {
+          const overdue = job.scheduleState === "overdue";
+          return (
+            <Link
+              key={job.id}
+              to={`/jobs/${job.id}`}
+              className="flex items-center gap-4 px-6 py-4 transition-colors hover:bg-accent/50"
+            >
+              <IconTile icon={CalendarClock} tone={overdue ? "warning" : "brand"} size="sm" />
+              <div className="min-w-0 flex-1">
+                <p className="truncate font-medium">{job.name}</p>
+                <p
+                  className={cn(
+                    "mt-0.5 truncate text-sm",
+                    overdue ? "text-warning" : "text-muted-foreground",
+                  )}
+                >
+                  {describeScheduleTitle(job.schedule)}
+                </p>
+              </div>
+              <span
                 className={cn(
-                  "mt-0.5 text-[13px]",
-                  job.scheduleState === "overdue" ? "text-warning" : "text-muted-foreground",
+                  "tabular shrink-0 text-sm font-medium",
+                  overdue ? "text-warning" : "text-foreground",
                 )}
               >
-                {describeScheduleTitle(job.schedule)}
-              </p>
-            </div>
-            <span
-              className={cn(
-                "tabular shrink-0 text-[13px]",
-                job.scheduleState === "overdue" ? "text-warning" : "text-muted-foreground",
-              )}
-            >
-              {job.scheduleState === "overdue"
-                ? "Overdue"
-                : job.nextDueAt
-                  ? fmtRelative(job.nextDueAt)
-                  : "—"}
-            </span>
-          </Link>
-        ))}
+                {overdue ? "Overdue" : job.nextDueAt ? fmtRelative(job.nextDueAt) : "—"}
+              </span>
+            </Link>
+          );
+        })}
       </div>
     </Card>
   );
 }
 
-function InlineLoadError({ onRetry }) {
+function RepositoryCards({ repositories, jobs }) {
+  const jobsPerRepo = React.useMemo(() => {
+    const m = {};
+    for (const j of jobs) m[j.repositoryId] = (m[j.repositoryId] || 0) + 1;
+    return m;
+  }, [jobs]);
+
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-[13px] text-destructive">
-      <span>Could not load dashboard data.</span>
-      <Button size="sm" variant="outline" onClick={onRetry}>
-        Retry
-      </Button>
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-3">
+      {repositories.map((repo) => {
+        const n = jobsPerRepo[repo.id] || 0;
+        return (
+          <Link key={repo.id} to={`/repositories/${repo.id}`} className="group rounded-2xl">
+            <Card className="flex h-full items-center gap-4 p-5 transition-colors group-hover:border-input">
+              <IconTile icon={repositoryIcon(repo)} tone="cyan" />
+              <div className="min-w-0 flex-1">
+                <p className="truncate font-semibold">{repo.name}</p>
+                <p className="mt-0.5 truncate font-mono text-xs text-muted-foreground">
+                  {repoLocation(repo) || "—"}
+                </p>
+              </div>
+              <span className="shrink-0 rounded-full bg-secondary px-2.5 py-0.5 text-xs font-medium tabular text-muted-foreground">
+                {n} job{n === 1 ? "" : "s"}
+              </span>
+            </Card>
+          </Link>
+        );
+      })}
     </div>
   );
 }
@@ -297,6 +422,24 @@ async function mergeRecentBackupFailures() {
   return unique;
 }
 
+function DashboardSkeleton() {
+  return (
+    <div className="space-y-6">
+      <Skeleton className="h-52 w-full rounded-2xl" />
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+        {[0, 1, 2, 3].map((i) => (
+          <Skeleton key={i} className="h-[136px] rounded-2xl" />
+        ))}
+      </div>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        {[0, 1].map((i) => (
+          <Skeleton key={i} className="h-48 rounded-2xl" />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const { activeRuns, runsVersion } = useLive();
 
@@ -308,22 +451,31 @@ export default function Dashboard() {
 
   const loadJobs = React.useCallback(async () => {
     const jobsR = await Jobs.list();
+    if (!jobsR.ok) throw new Error(jobsR.body?.error || "Could not load jobs");
     const jobs = jobsR.body?.jobs || [];
     const attention = selectAttention(jobs);
 
     let folders = [];
     let repositories = [];
     let recentFailures = [];
+    let latest = [];
 
     if (jobs.length === 0) {
       const [foldersR, reposR] = await Promise.all([Folders.list(), Repositories.list()]);
       folders = foldersR.body?.folders || [];
       repositories = reposR.body?.repositories || [];
-    } else if (attention.length > 0) {
-      recentFailures = await mergeRecentBackupFailures();
+    } else {
+      const [reposR, latestR, failures] = await Promise.all([
+        Repositories.list(),
+        Runs.list({ status: "finished", limit: LATEST_CAP }),
+        attention.length > 0 ? mergeRecentBackupFailures() : Promise.resolve([]),
+      ]);
+      repositories = reposR.body?.repositories || [];
+      latest = latestR.body?.runs || [];
+      recentFailures = failures;
     }
 
-    return { jobs, folders, repositories, recentFailures };
+    return { jobs, folders, repositories, recentFailures, latest };
   }, []);
   const { data, loading, error, reload: reloadJobs } = useFetch(loadJobs);
 
@@ -338,6 +490,10 @@ export default function Dashboard() {
   const jobs = data?.jobs ?? [];
   const attention = React.useMemo(() => selectAttention(jobs), [jobs]);
   const upcoming = React.useMemo(() => selectUpcoming(jobs), [jobs]);
+  const jobCards = React.useMemo(
+    () => orderJobCards(jobs, attention).slice(0, JOB_CARDS_CAP),
+    [jobs, attention],
+  );
   const scheduledTotal = React.useMemo(
     () => jobs.filter((j) => j.schedule?.enabled).length,
     [jobs],
@@ -345,14 +501,18 @@ export default function Dashboard() {
   const empty = !loading && data && jobs.length === 0;
   const needsAttention = attention.length > 0;
   const recentFailures = data?.recentFailures || [];
+  const strips = useJobStrips(
+    jobCards.map((j) => j.id),
+    runsVersion,
+  );
+  const repositories = data?.repositories || [];
 
   const repoCount = statusData?.counts?.repositories ?? 0;
   // Folders and databases are both sources a job can back up.
   const folderCount = (statusData?.counts?.folders ?? 0) + (statusData?.counts?.databases ?? 0);
   const jobCount = loading && !data ? (statusData?.counts?.jobs ?? 0) : jobs.length;
 
-  const hasFolder =
-    (data?.folders?.length ?? 0) > 0 || folderCount > 0;
+  const hasFolder = (data?.folders?.length ?? 0) > 0 || folderCount > 0;
   const hasRepo =
     (data?.repositories?.length ?? 0) > 0 || (statusData?.counts?.repositories ?? 0) > 0;
 
@@ -364,61 +524,114 @@ export default function Dashboard() {
       />
 
       {error ? (
-        <div className="mb-4">
-          <InlineLoadError
-            onRetry={() => {
-              reloadStatus();
-              reloadJobs();
-            }}
-          />
-        </div>
+        <ErrorState
+          className="mb-6"
+          title="Could not load dashboard data"
+          description="The jobs list did not load, so health and history below may be missing. Check that the server is running, then retry."
+          onRetry={() => {
+            reloadStatus();
+            reloadJobs();
+          }}
+        />
       ) : null}
 
       {loading && !data && !statusData ? (
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <Skeleton className="h-20 rounded-lg" />
-            <Skeleton className="h-20 rounded-lg" />
-            <Skeleton className="h-20 rounded-lg" />
-            <Skeleton className="h-20 rounded-lg" />
-          </div>
-          <Skeleton className="h-40 w-full rounded-lg" />
-        </div>
+        <DashboardSkeleton />
       ) : (
-        <div className="space-y-4">
-          <InventoryStrip
-            repoCount={repoCount}
-            folderCount={folderCount}
-            jobCount={jobCount}
-            scheduledCount={scheduledTotal}
-          />
+        <div className="space-y-10">
+          <div className="space-y-4">
+            {empty ? (
+              <GettingStarted hasFolder={hasFolder} hasRepo={hasRepo} />
+            ) : data ? (
+              <HealthHero
+                jobs={jobs}
+                attention={attention}
+                strips={strips}
+                upcoming={upcoming}
+                running={activeRuns.length}
+              />
+            ) : null}
 
-          {empty ? (
-            <GettingStarted hasFolder={hasFolder} hasRepo={hasRepo} />
-          ) : null}
-
-          {!empty && needsAttention ? <HealthBanner attention={attention} /> : null}
+            <InventoryStrip
+              repoCount={repoCount}
+              folderCount={folderCount}
+              jobCount={jobCount}
+              scheduledCount={scheduledTotal}
+            />
+          </div>
 
           <ActiveRunsCard
             runs={activeRuns}
             showActivityLink
             emptyDescription="Start a backup from a job when you are ready."
             emptyAction={
-              <Button size="sm" variant="outline" asChild>
+              <Button variant="outline" asChild>
                 <Link to="/jobs">Open Jobs</Link>
               </Button>
             }
           />
 
-          {!empty && needsAttention ? <AttentionCard attention={attention} /> : null}
-
-          {!empty && needsAttention && recentFailures.length > 0 ? (
-            <RecentFailuresCard runs={recentFailures} />
+          {!empty && needsAttention ? (
+            <div className={cn("grid grid-cols-1 items-start gap-4", recentFailures.length > 0 && "lg:grid-cols-2")}>
+              <AttentionCard attention={attention} />
+              {recentFailures.length > 0 ? <RecentFailuresCard runs={recentFailures} /> : null}
+            </div>
           ) : null}
 
-          {!empty && upcoming.length > 0 ? <UpcomingCard jobs={upcoming} /> : null}
+          {!empty && jobCards.length > 0 ? (
+            <Section
+              title="Backup jobs"
+              description={`The last ${STRIP_SLOTS} backups of each job, newest on the left.`}
+              action={<SeeAll to="/jobs">All jobs</SeeAll>}
+            >
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                {jobCards.map((job) => (
+                  <JobCard key={job.id} job={job} runs={strips[job.id] || []} />
+                ))}
+              </div>
+              <StripLegend />
+            </Section>
+          ) : null}
+
+          {!empty && data ? (
+            <div className={cn("grid grid-cols-1 items-start gap-4", upcoming.length > 0 && "lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]")}>
+              <LatestRunsCard runs={data.latest || []} />
+              {upcoming.length > 0 ? <UpcomingCard jobs={upcoming} /> : null}
+            </div>
+          ) : null}
+
+          {!empty && repositories.length > 0 ? (
+            <Section
+              title="Repositories"
+              description="Where the snapshots are stored."
+              action={<SeeAll to="/repositories">All repositories</SeeAll>}
+            >
+              <RepositoryCards repositories={repositories} jobs={jobs} />
+            </Section>
+          ) : null}
         </div>
       )}
     </Page>
+  );
+}
+
+/** StripLegend names the colours of the run strip once, below the cards. */
+function StripLegend() {
+  const items = [
+    { label: "Succeeded", fill: "bg-success" },
+    { label: "Warnings", fill: "bg-warning" },
+    { label: "Failed", fill: "bg-destructive" },
+    { label: "Running", fill: "bg-running" },
+    { label: "Stopped", fill: "bg-muted-foreground/45" },
+  ];
+  return (
+    <div className="flex flex-wrap gap-x-5 gap-y-2 text-xs text-muted-foreground">
+      {items.map((i) => (
+        <span key={i.label} className="flex items-center gap-2">
+          <span className={cn("h-3 w-1.5 rounded-full", i.fill)} />
+          {i.label}
+        </span>
+      ))}
+    </div>
   );
 }
