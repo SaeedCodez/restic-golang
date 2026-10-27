@@ -220,6 +220,7 @@ restic-webctl repo test <id|name>
 restic-webctl repo init <id|name> [--wait]
 restic-webctl repo unlock <id|name>
 restic-webctl repo check <id|name> [--read-data | --read-data-subset S] [--wait]
+restic-webctl repo speedtest <id|name> [--size MB] [--wait] [--follow]
 restic-webctl repo snapshots <id|name>
 restic-webctl repo restore <id|name> --snapshot ID --target PATH [--wait]
 # Restore replaces the destination: snapshot files overwrite, extras are deleted.
@@ -255,6 +256,33 @@ also reads and verifies every data pack (slow, downloads everything from S3);
 If restic finds damage, the run fails with `error` "the repository check found
 errors" and the run log (`run log <runId>`) holds restic's details and
 suggested `restic repair …` commands. The app never runs repairs itself.
+
+`repo speedtest` measures how fast the repository takes and returns data, as a
+tracked run (kind `speedtest`). It backs up `--size` MB (default 64, at most
+1024; 1 MB = 1 MiB) of random data with `restic backup --stdin` and reads it
+back with `restic dump`, timing each against the same operation on a 1 KiB
+file. Both test snapshots carry the tag `resticweb-speedtest` and are forgotten
+at the end, even if the test fails or is stopped; their data is reclaimed at
+the next prune (the next retention run, `repo reset`, …). The test moves about
+twice `--size` over the network. A finished run (`--wait`) carries the result in
+`summary.speed`:
+
+```json
+{
+  "sizeBytes": 67108864,
+  "uploadSeconds": 2.9, "downloadSeconds": 1.4, "overheadSeconds": 1.6,
+  "uploadBytesPerSec": 23141012, "downloadBytesPerSec": 47934902,
+  "score": 71, "rating": "Good"
+}
+```
+
+`overheadSeconds` is what a backup or restore spends before any data moves
+(opening the repository, unlocking its key, loading the index, locking). The
+score (0–100) weighs upload and download 40% each and the overhead 20%, each on
+a log scale: transfers score 0 at 1 MB/s, 50 at 10 MB/s and 100 at 100 MB/s;
+the overhead scores 0 at 30 s and 100 at 1 s. Ratings: 80+ Excellent, 60+
+Good, 40+ Fair, 20+ Slow, below 20 Very slow. `repo get` and `GET
+/api/repositories` carry the newest result as `lastSpeedTest`.
 
 A run's log shows restic's stderr (backend retry warnings, errors). restic
 prints nothing while it opens the repository and loads the index, so when a run

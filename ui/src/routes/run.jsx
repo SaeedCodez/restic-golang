@@ -19,6 +19,7 @@ import { errorOf } from "@/lib/api";
 import { useRunStream } from "@/lib/live";
 import { fmtBytes, fmtCount, fmtDur, fmtTime, runDuration, shortId } from "@/lib/format";
 import { STATUS_PHASE, STATUS_TEXT, displayPercent, isActive, kindLabel } from "@/lib/runs";
+import { fmtSpeed } from "@/lib/speed";
 import { cn } from "@/lib/utils";
 
 function Stat({ label, value, mono }) {
@@ -40,8 +41,16 @@ function Stat({ label, value, mono }) {
 function SummaryStats({ run }) {
   const s = run.summary;
   if (!s) return null;
+  const sp = s.speed;
   const stats =
-    run.kind === "restore_db"
+    run.kind === "speedtest" && sp
+      ? [
+          { label: "Score", value: `${sp.score} · ${sp.rating}` },
+          { label: "Upload", value: fmtSpeed(sp.uploadBytesPerSec) },
+          { label: "Download", value: fmtSpeed(sp.downloadBytesPerSec) },
+          { label: "Overhead", value: `${Number(sp.overheadSeconds).toFixed(1)} s` },
+        ]
+      : run.kind === "restore_db"
       ? [
           { label: "Data imported", value: fmtBytes(s.bytesRestored) },
           run.params?.safetySnapshot
@@ -88,8 +97,10 @@ function ProgressHero({ run }) {
 
   // Once a run has a summary, that is the truth about what it processed. restic's
   // last status tick always lands a little short of the total, so a finished run
-  // must not read "6 / 8 files" next to 100%.
-  const s = run.summary;
+  // must not read "6 / 8 files" next to 100%. A speed test counts its own
+  // progress (test data moved), which its summary does not restate.
+  const speed = run.kind === "speedtest";
+  const s = speed ? null : run.summary;
   const p = s
     ? {
         ...run.progress,
@@ -140,7 +151,9 @@ function ProgressHero({ run }) {
         <span>
           {run.kind === "restore_db"
             ? "database import"
-            : `${fmtCount(p.filesDone)} / ${fmtCount(p.totalFiles)} files`}
+            : speed
+              ? "test data moved"
+              : `${fmtCount(p.filesDone)} / ${fmtCount(p.totalFiles)} files`}
         </span>
         <span>
           {fmtBytes(p.bytesDone)} / {fmtBytes(p.totalBytes)}
@@ -311,6 +324,9 @@ export default function RunView() {
                   : null,
                 current.kind === "backup" && current.folderPath && !current.params?.databaseId
                   ? { label: "Source", value: current.folderPath, mono: true }
+                  : null,
+                current.kind === "speedtest" && current.params?.sizeBytes
+                  ? { label: "Test size", value: `${fmtBytes(Number(current.params.sizeBytes))} each way` }
                   : null,
                 { label: "Started", value: fmtTime(current.startedAt) },
                 current.finishedAt ? { label: "Finished", value: fmtTime(current.finishedAt) } : null,

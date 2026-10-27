@@ -97,6 +97,7 @@ type fakeRunner struct {
 	forgetCalls     []forgetCall
 	previewCalls    []forgetCall
 	forgetSnapCalls []forgetSnapshotsCall
+	dropCalls       []forgetSnapshotsCall
 	checkCalls      []string
 	stdinCalls      []stdinCall
 	dumpCalls       []string
@@ -261,6 +262,25 @@ func (f *fakeRunner) recordedForgetSnapshots() []forgetSnapshotsCall {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]forgetSnapshotsCall(nil), f.forgetSnapCalls...)
+}
+
+// DropSnapshots records the ids it was given; it never prunes, so it does not
+// go through streamFn.
+func (f *fakeRunner) DropSnapshots(ctx context.Context, repo *Repository, snapshotIDs []string, sink RunSink) (int, error) {
+	ids := uniqueNonEmpty(snapshotIDs)
+	f.mu.Lock()
+	f.dropCalls = append(f.dropCalls, forgetSnapshotsCall{IDs: append([]string(nil), ids...)})
+	f.mu.Unlock()
+	if len(ids) > 0 {
+		sink.PID(4242, "faketoken")
+	}
+	return 0, nil
+}
+
+func (f *fakeRunner) recordedDrops() []forgetSnapshotsCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]forgetSnapshotsCall(nil), f.dropCalls...)
 }
 
 func (f *fakeRunner) BackupStdin(ctx context.Context, repo *Repository, filename string, tags []string, produce func(w io.Writer) error, sink RunSink) (int, error) {

@@ -6,6 +6,7 @@ import {
   DatabaseBackup,
   Eraser,
   FolderInput,
+  Gauge,
   History,
   Play,
   Scissors,
@@ -17,6 +18,7 @@ import { IconTile } from "@/components/kind";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { fmtBytes, fmtRelative, fmtTime, runDuration, shortId } from "@/lib/format";
 import { kindLabel } from "@/lib/runs";
+import { speedSummary } from "@/lib/speed";
 import { cn } from "@/lib/utils";
 
 export const KIND_ICON = {
@@ -29,6 +31,7 @@ export const KIND_ICON = {
   forget: Eraser,
   check: ShieldCheck,
   restore_db: DatabaseBackup,
+  speedtest: Gauge,
 };
 
 /** A run's tile wears its outcome, so a list of runs reads at a glance. */
@@ -46,6 +49,7 @@ export const STATUS_TONE = {
 function storedSummary(run) {
   const s = run.summary;
   if (!s) return null;
+  if (run.kind === "speedtest") return speedSummary(s.speed);
   if (run.kind === "restore" || run.kind === "download") {
     return `${fmtBytes(s.bytesRestored)} restored`;
   }

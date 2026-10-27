@@ -68,6 +68,35 @@ type repoView struct {
 	SecretKey    string `json:"secretKey,omitempty"`
 	HasPassword  bool   `json:"hasPassword"`
 	HasSecretKey bool   `json:"hasSecretKey"`
+	// LastSpeedTest is the newest speed test result, if the repository has one.
+	LastSpeedTest *SpeedTestView `json:"lastSpeedTest,omitempty"`
+}
+
+// SpeedTestView is one speed test result and the run that measured it.
+type SpeedTestView struct {
+	RunID    string    `json:"runId"`
+	TestedAt time.Time `json:"testedAt"`
+	SpeedTest
+}
+
+func SpeedTestViewOf(run *Run) *SpeedTestView {
+	if run == nil || run.Summary == nil || run.Summary.Speed == nil {
+		return nil
+	}
+	at := run.StartedAt
+	if run.FinishedAt != nil {
+		at = *run.FinishedAt
+	}
+	return &SpeedTestView{RunID: run.ID, TestedAt: at, SpeedTest: *run.Summary.Speed}
+}
+
+// withSpeedTests attaches each repository's newest speed test result.
+func (s *Server) withSpeedTests(views []repoView) []repoView {
+	latest := s.app.Runs.latestSpeedTests()
+	for i := range views {
+		views[i].LastSpeedTest = SpeedTestViewOf(latest[views[i].ID])
+	}
+	return views
 }
 
 func repoViewOf(repo Repository) repoView {
@@ -90,7 +119,7 @@ func repoViewsOf(repos []Repository) []repoView {
 }
 
 func (s *Server) handleRepoList(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "repositories": repoViewsOf(s.app.Repos.List())})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "repositories": s.withSpeedTests(repoViewsOf(s.app.Repos.List()))})
 }
 
 func (s *Server) handleRepoCreate(w http.ResponseWriter, r *http.Request) {
@@ -116,7 +145,7 @@ func (s *Server) handleRepoGet(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, http.StatusNotFound, "not_found", "repository not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "repository": repoViewOf(repo)})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "repository": s.withSpeedTests([]repoView{repoViewOf(repo)})[0]})
 }
 
 func (s *Server) handleRepoUpdate(w http.ResponseWriter, r *http.Request) {

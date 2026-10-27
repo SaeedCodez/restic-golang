@@ -30,6 +30,7 @@ const KIND_FILTERS = [
   { value: "download", label: "Downloads", icon: KIND_ICON.download },
   { value: "init", label: "Initializations", icon: KIND_ICON.init },
   { value: "check", label: "Checks", icon: KIND_ICON.check },
+  { value: "speedtest", label: "Speed tests", icon: KIND_ICON.speedtest },
 ];
 
 const STATUS_FILTERS = [

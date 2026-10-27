@@ -547,6 +547,8 @@ const (
 	KindCheck     RunKind = "check"
 	// KindRestoreDB replaces a database with a dump from a snapshot.
 	KindRestoreDB RunKind = "restore_db"
+	// KindSpeedTest measures how fast a repository takes and returns data.
+	KindSpeedTest RunKind = "speedtest"
 )
 
 // TriggerAfterBackup marks a retention run started after a successful backup.
@@ -610,6 +612,25 @@ type Summary struct {
 	FilesRestored       int64   `json:"filesRestored,omitempty"`
 	BytesRestored       int64   `json:"bytesRestored,omitempty"`
 	TotalDuration       float64 `json:"totalDuration"`
+
+	// Speed is the result of a speed test run; nil for every other kind.
+	Speed *SpeedTest `json:"speed,omitempty"`
+}
+
+// SpeedTest is what a speed test measured. Upload and download are the time
+// the test data took to move, with the cost of backing up and restoring a tiny
+// file taken out; that cost is reported on its own as Overhead, the time every
+// backup or restore spends opening the repository before any data moves.
+type SpeedTest struct {
+	SizeBytes           int64   `json:"sizeBytes"`
+	UploadSeconds       float64 `json:"uploadSeconds"`
+	DownloadSeconds     float64 `json:"downloadSeconds"`
+	OverheadSeconds     float64 `json:"overheadSeconds"`
+	UploadBytesPerSec   float64 `json:"uploadBytesPerSec"`
+	DownloadBytesPerSec float64 `json:"downloadBytesPerSec"`
+	// Score is 0–100; Rating names its band ("Excellent" … "Very slow").
+	Score  int    `json:"score"`
+	Rating string `json:"rating"`
 }
 
 // Run is one execution of any long-running operation — the durable unit of
@@ -666,6 +687,10 @@ func (r *Run) clone() *Run {
 	}
 	if r.Summary != nil {
 		s := *r.Summary
+		if r.Summary.Speed != nil {
+			sp := *r.Summary.Speed
+			s.Speed = &sp
+		}
 		cp.Summary = &s
 	}
 	if r.ExitCode != nil {

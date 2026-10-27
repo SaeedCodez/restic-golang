@@ -6,7 +6,7 @@ the real work (deduplication, chunking, encryption) — and serves a single-page
 built around three things you create and manage:
 
 - **Storage repositories** — several named places to store backups, added and
-  edited in the app.
+  edited in the app, each with a speed test that scores it 0–100.
 - **Backup sources** — named, reusable source folders, and databases
   (PostgreSQL, MySQL, MariaDB) dumped from their containers.
 - **Backup jobs** — the core concept: a saved, named pairing of one source and
@@ -348,6 +348,8 @@ that API (see [docs/cli.md](docs/cli.md)); you can also call it directly:
 | `POST /api/repositories/{id}/forget` | `202` forget+prune of one snapshot (`{ snapshotId }`) |
 | `POST /api/repositories/{id}/reset` | `202` forget+prune of every snapshot; the repository entity stays |
 | `POST /api/repositories/{id}/check` | `202` integrity check run (`restic check`); optional `{ readData: "all" \| "10%" \| "n/t" \| size }` |
+| `POST /api/repositories/{id}/speedtest` | `202` speed test run; optional `{ sizeMB }` (default 64, at most 1024). The result is the run's `summary.speed` |
+| `GET /api/repositories/{id}/speedtests` | recent speed test results, newest first (`?limit=`, default 10); `GET /api/repositories` carries the newest as `lastSpeedTest` |
 | `GET /api/runs` | filter with `status` (`active`/`finished`/an exact status), `kind`, `jobId`, `limit`; `total` reports the match count before the limit |
 | `GET /api/runs/{id}/log` | the durable log, `?after=<seq>` for incremental reads |
 | `GET /api/runs/{id}/events` | SSE: run state, progress and log, resumable via `Last-Event-ID` |
@@ -420,6 +422,7 @@ stored choice is applied before first paint, so the page never flashes.
 | Retention       | `restic -r <repo> forget --tag … --keep-* --prune --json` |
 | Forget snapshot | `restic -r <repo> forget <id> --prune --json`           |
 | Check           | `restic -r <repo> check [--read-data \| --read-data-subset S]` |
+| Speed test      | random data into `restic backup --stdin --tag resticweb-speedtest`, read back with `restic dump`, each timed against a 1 KiB file; then `forget <ids…> --json` (no prune) |
 | Forget job data | list by tag, then `forget <ids…> --prune --json`        |
 | Empty repository| list all snapshots, then `forget <ids…> --prune --json` |
 

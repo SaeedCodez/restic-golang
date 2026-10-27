@@ -62,6 +62,11 @@ func (c *CLI) cmdRepo(args []string) int {
 			return c.fail(err)
 		}
 		return c.repoCheck(args[1], args[2:])
+	case "speedtest":
+		if err := requireArgs(args[1:], 1, helpRepo()); err != nil {
+			return c.fail(err)
+		}
+		return c.repoSpeedTest(args[1], args[2:])
 	case "snapshots", "snaps":
 		if err := requireArgs(args[1:], 1, helpRepo()); err != nil {
 			return c.fail(err)
@@ -136,6 +141,9 @@ func (c *CLI) repoGet(query string) int {
 		return c.fail(err)
 	}
 	v := repoViewOf(repo)
+	if tests := c.app.Runs.SpeedTests(repo.ID, 1); len(tests) > 0 {
+		v.LastSpeedTest = core.SpeedTestViewOf(tests[0])
+	}
 	if c.cfg.json {
 		return c.writeJSON(map[string]any{"ok": true, "repository": v})
 	}
@@ -152,6 +160,10 @@ func (c *CLI) repoGet(query string) int {
 		fmt.Printf("hasSecretKey:\t%v\n", v.HasSecretKey)
 	}
 	fmt.Printf("hasPassword:\t%v\n", v.HasPassword)
+	if st := v.LastSpeedTest; st != nil {
+		fmt.Printf("speed:\t%d/100 %s (up %.1f MB/s, down %.1f MB/s, %s)\n", st.Score, st.Rating,
+			st.UploadBytesPerSec/(1<<20), st.DownloadBytesPerSec/(1<<20), st.TestedAt.Local().Format(time.RFC3339))
+	}
 	return exitOK
 }
 
@@ -411,6 +423,21 @@ func (c *CLI) repoCheck(query string, args []string) int {
 		readData = "all"
 	}
 	run, err := c.app.Coord.StartCheck(repo.ID, readData)
+	return c.startAndMaybeWait(run, err, wait, follow)
+}
+
+func (c *CLI) repoSpeedTest(query string, args []string) int {
+	repo, err := c.resolveRepo(query)
+	if err != nil {
+		return c.fail(err)
+	}
+	args, wait, follow := parseWaitFollow(args)
+	fs := newFlagSet("repo speedtest")
+	size := fs.Int("size", core.SpeedTestDefaultMB, "MB of random data to move each way")
+	if err := parseFlagSet(fs, args, helpRepo()); err != nil {
+		return c.fail(err)
+	}
+	run, err := c.app.Coord.StartSpeedTest(repo.ID, *size)
 	return c.startAndMaybeWait(run, err, wait, follow)
 }
 

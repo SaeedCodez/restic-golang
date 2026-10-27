@@ -78,6 +78,7 @@ func helpRepo() string {
   restic-webctl repo init <id|name> [--wait]
   restic-webctl repo unlock <id|name>
   restic-webctl repo check <id|name> [--read-data | --read-data-subset S] [--wait] [--follow]
+  restic-webctl repo speedtest <id|name> [--size MB] [--wait] [--follow]
   restic-webctl repo snapshots <id|name>
   restic-webctl repo files <id|name> --snapshot ID [--path DIR]
   restic-webctl repo restore <id|name> --snapshot ID --target PATH [--include P]… [--stop-containers] [--wait]
@@ -91,6 +92,10 @@ S3 create options:     --endpoint URL --bucket NAME [--region R] --access-key K 
 
 check verifies repository structure; --read-data also reads every data pack,
 --read-data-subset reads part of them (e.g. 10%, 1/5, 500M).
+
+speedtest backs up --size MB (default 64) of random data and reads it back,
+then scores the repository 0-100 (summary.speed). The test snapshots are
+forgotten; their space is reclaimed at the next prune.
 
 restore replaces the destination (files not in the snapshot are deleted). With
 --include only the given snapshot paths are restored and replaced.

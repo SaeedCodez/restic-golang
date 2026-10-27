@@ -11,6 +11,7 @@ import { ErrorState } from "@/components/empty";
 import { IconTile, KindTile, repositoryIcon } from "@/components/kind";
 import { RepositoryDialog, backendLabel } from "@/routes/repositories";
 import { SnapshotsPanel } from "@/components/snapshots-panel";
+import { SpeedTestCard } from "@/components/speed-test";
 import { StatusDot } from "@/components/status-badge";
 import { useConfirm } from "@/components/confirm";
 import NotFound from "@/routes/not-found";
@@ -269,6 +270,8 @@ export default function RepositoryDetail() {
               ) : null}
             </CardContent>
           </Card>
+
+          <SpeedTestCard repositoryId={id} />
 
           <Card>
             <CardHeader>

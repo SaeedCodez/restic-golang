@@ -132,6 +132,31 @@ func TestIntegrationSelectiveRestoreReplacesOnlySelection(t *testing.T) {
 	}
 }
 
+// TestIntegrationSpeedTest runs a speed test against a real local repository:
+// it measures both ways, scores the result, and leaves no snapshot behind.
+func TestIntegrationSpeedTest(t *testing.T) {
+	requireIntegration(t, false)
+	app := testApp(t, newResticRunner())
+	repo := localRepo(t, app)
+	succeeds(t, app)(app.Coord.StartInit(repo.ID))
+
+	run := succeeds(t, app)(app.Coord.StartSpeedTest(repo.ID, 4))
+	sp := run.Summary.Speed
+	if sp == nil || sp.SizeBytes != 4<<20 || sp.UploadBytesPerSec <= 0 || sp.DownloadBytesPerSec <= 0 || sp.OverheadSeconds <= 0 {
+		t.Fatalf("speed = %+v\n%s", sp, logText(t, app, run.ID))
+	}
+	t.Logf("local repository: up %.0f MB/s, down %.0f MB/s, overhead %.2f s, score %d %s",
+		sp.UploadBytesPerSec/(1<<20), sp.DownloadBytesPerSec/(1<<20), sp.OverheadSeconds, sp.Score, sp.Rating)
+
+	snaps, err := newResticRunner().Snapshots(context.Background(), &repo, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snaps) != 0 {
+		t.Fatalf("snapshots left after the test: %+v", snaps)
+	}
+}
+
 // dbEngineCase is one database server image to exercise.
 type dbEngineCase struct {
 	engine, image string

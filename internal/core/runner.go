@@ -66,6 +66,10 @@ type Runner interface {
 	// ForgetSnapshots removes the given snapshot IDs, then prunes unreferenced
 	// data. An empty list is a no-op success (nothing to forget).
 	ForgetSnapshots(ctx context.Context, repo *Repository, snapshotIDs []string, sink RunSink) (int, error)
+	// DropSnapshots forgets the given snapshot IDs without pruning: the data
+	// only they used stays in the repository until the next prune reclaims it.
+	// An empty list is a no-op success.
+	DropSnapshots(ctx context.Context, repo *Repository, snapshotIDs []string, sink RunSink) (int, error)
 	// Check verifies repository integrity (`restic check`). readData is "" for a
 	// structure-only check, "all" for --read-data, or a --read-data-subset value
 	// such as "10%". Exit code 1 means restic found errors (or could not run).
@@ -495,6 +499,21 @@ func (*resticRunner) ForgetSnapshots(ctx context.Context, repo *Repository, snap
 		}
 		if code != 0 && code != resticExitWarnings {
 			return code, nil
+		}
+	}
+	return last, nil
+}
+
+func (*resticRunner) DropSnapshots(ctx context.Context, repo *Repository, snapshotIDs []string, sink RunSink) (int, error) {
+	var last int
+	for _, b := range planForgetBatches(snapshotIDs, forgetSnapshotBatchSize) {
+		if err := ctx.Err(); err != nil {
+			return resticExitInterrupted, nil
+		}
+		code, err := streamRestic(ctx, repo, KindForget, sink, forgetSnapshotArgs(b.IDs, false)...)
+		last = code
+		if err != nil || (code != 0 && code != resticExitWarnings) {
+			return code, err
 		}
 	}
 	return last, nil
