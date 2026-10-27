@@ -114,7 +114,21 @@ export const Jobs = {
   list: () => api.get("/api/jobs"),
   get: (id) => api.get(`/api/jobs/${id}`),
   create: (b) => api.post("/api/jobs", b),
-  update: (id, b) => api.put(`/api/jobs/${id}`, b),
+  /**
+   * save stores `job` with `changes` applied. PUT replaces the whole job, so
+   * every field it keeps — its source, folder or database, among them — is
+   * sent from `job` as the API returned it.
+   */
+  save: (job, changes) =>
+    api.put(`/api/jobs/${job.id}`, {
+      name: job.name,
+      folderId: job.folderId,
+      databaseId: job.databaseId,
+      repositoryId: job.repositoryId,
+      schedule: job.schedule || null,
+      retention: job.retention || null,
+      ...changes,
+    }),
   remove: (id) => api.del(`/api/jobs/${id}`),
   run: (id) => api.post(`/api/jobs/${id}/run`),
   /** dryRun previews what the policy keeps and removes, changing nothing. */
