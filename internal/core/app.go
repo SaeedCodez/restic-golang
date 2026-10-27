@@ -29,6 +29,9 @@ type App struct {
 
 	Auth     *AuthStore
 	Sessions *SessionManager
+	// SetupToken must accompany first-run setup over HTTP (see NewSetupToken).
+	// The server sets it on start while no password is set; empty refuses setup.
+	SetupToken string
 
 	Runs   *RunStore
 	Runner Runner

@@ -109,7 +109,8 @@ and the process exits non-zero. Agents should check **both** the exit code and
 ## Web UI password (optional)
 
 CLI ops do not need auth. These commands only manage the **web UI** password
-stored in Postgres:
+stored in Postgres (at least 12 characters). `auth setup` here needs no setup
+token: the web setup page asks for the one the server prints to its log.
 
 ```sh
 restic-webctl auth status

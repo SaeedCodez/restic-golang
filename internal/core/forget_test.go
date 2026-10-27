@@ -45,12 +45,12 @@ func TestPlanForgetBatches(t *testing.T) {
 
 func TestForgetSnapshotArgs(t *testing.T) {
 	got := strings.Join(forgetSnapshotArgs([]string{"abc", "def"}, true), " ")
-	want := "forget --json --prune abc def"
+	want := "forget --json --prune -- abc def"
 	if got != want {
 		t.Fatalf("prune args = %q, want %q", got, want)
 	}
 	got = strings.Join(forgetSnapshotArgs([]string{"abc"}, false), " ")
-	if got != "forget --json abc" {
+	if got != "forget --json -- abc" {
 		t.Fatalf("no-prune args = %q", got)
 	}
 }

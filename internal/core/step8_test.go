@@ -82,6 +82,7 @@ func TestRestoreValidation(t *testing.T) {
 func TestDownloadRunAndZip(t *testing.T) {
 	fake := &fakeRunner{
 		installed: true,
+		snaps:     []Snapshot{{ID: "snap1", ShortID: "snap1"}},
 		onRestore: func(target string) {
 			_ = os.WriteFile(filepath.Join(target, "hello.txt"), []byte("hi there"), 0o644)
 		},
@@ -135,7 +136,7 @@ func TestDownloadRunAndZip(t *testing.T) {
 func TestDownloadNotReady(t *testing.T) {
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})
-	fake := &fakeRunner{installed: true, streamFn: gatedStream(started, release)}
+	fake := &fakeRunner{installed: true, snaps: []Snapshot{{ID: "snap1", ShortID: "snap1"}}, streamFn: gatedStream(started, release)}
 	app := testApp(t, fake)
 	h := routesFor(t, app)
 

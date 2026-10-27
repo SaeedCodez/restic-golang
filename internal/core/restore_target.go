@@ -80,11 +80,11 @@ func restoreArgs(snapshotID, target string, include []string) ([]string, error) 
 	if isResticRootTarget(target) && len(filters) == 0 {
 		return nil, fmt.Errorf("cannot restore to / as a replacement without a path to limit what is deleted")
 	}
-	args := []string{"restore", snapshotID, "--target", target, "--delete", "--json"}
+	args := []string{"restore", "--target", target, "--delete", "--json"}
 	for _, p := range filters {
 		args = append(args, "--include", escapeResticPattern(p))
 	}
-	return args, nil
+	return append(args, "--", snapshotID), nil
 }
 
 // escapeResticPattern makes a path match only itself as a restic --include:

@@ -311,6 +311,11 @@ func (s *Server) handleSnapshotLs(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	tree, err := s.app.SnapshotTree(ctx, &repo, snapshotID)
 	if err != nil {
+		var invalid *ValidationError
+		if errors.As(err, &invalid) {
+			errorJSON(w, http.StatusBadRequest, "invalid", invalid.Msg)
+			return
+		}
 		s.writeResticError(w, "restic_error", err)
 		return
 	}

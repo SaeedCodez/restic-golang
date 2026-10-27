@@ -303,6 +303,9 @@ func (a *App) SnapshotTree(ctx context.Context, repo *Repository, snapshotID str
 	if snapshotID == "" {
 		return nil, validf("please choose a snapshot")
 	}
+	if err := checkSnapshotID(snapshotID); err != nil {
+		return nil, err
+	}
 	key := snapshotTreeKey(repo.ID, snapshotID)
 	if t, ok := a.Snapshots.Get(key); ok {
 		return t, nil

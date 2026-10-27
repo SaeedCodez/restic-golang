@@ -25,7 +25,8 @@ away; and if the app is killed mid-backup it never comes back claiming something
 is still running.
 
 This is a single-user tool meant to run on your own machine. On first open you
-set a login password; afterwards the UI asks for it on each session, and you can
+set a login password, using the one-time **setup token** the server prints to
+its log; afterwards the UI asks for the password on each session, and you can
 change it later from Settings.
 
 ---
@@ -93,7 +94,8 @@ cp docker-compose.override.example.yml docker-compose.override.yml   # publish :
 docker compose up --build
 ```
 
-Open http://127.0.0.1:8080. Default DB user/password/db are all `restic`
+Open http://127.0.0.1:8080 and enter the setup token from
+`docker compose logs app`. Default DB user/password/db are all `restic`
 (override with `SERVICE_PASSWORD_DB` if you like). Coolify uses the same
 `docker-compose.yaml` with its Compose build pack (no host port bind; Traefik proxies).
 
@@ -151,6 +153,11 @@ the same time, even to different repositories.
 site's containers while it runs), or **Browse** a snapshot and restore or
 download just some files and folders; in place, only the selection is replaced.
 
+After the first deploy, open the app's **Logs** in Coolify and copy the line
+`No login password is set yet. … setup token: …`: the setup page asks for that
+token, so nobody who finds the URL before you can choose the password. To pick
+the token yourself, set `RESTIC_WEB_SETUP_TOKEN` on the app.
+
 Security: the Docker socket gives this app root-equivalent control of the
 server. Keep the app behind its login password, and only on a domain you trust.
 Without the socket the app still works; the Coolify page and database backups
@@ -166,7 +173,8 @@ go run ./cmd/restic-web
 The app loads `.env` from the working directory on startup (real environment
 variables still win if already set). Then open the printed URL (default
 `http://127.0.0.1:8080`). On first open the app asks you to choose a login
-password; later visits show the login page, and you can change the password under
+password, together with the setup token the server printed in the terminal on
+start; later visits show the login page, and you can change the password under
 Settings. Migrations run automatically on startup.
 
 Flags:
@@ -338,8 +346,8 @@ that API (see [docs/cli.md](docs/cli.md)); you can also call it directly:
 | Endpoint | Notes |
 | --- | --- |
 | `GET /api/auth/status` | public; `{ setupRequired, authenticated }` for the login gate |
-| `POST /api/auth/setup` | public once; sets the login password on first open and starts a session |
-| `POST /api/auth/login` | public; `{ password }` → HttpOnly session cookie |
+| `POST /api/auth/setup` | public once; `{ password, setupToken }` sets the login password on first open and starts a session; `403` `bad_setup_token` without the token from the server log |
+| `POST /api/auth/login` | public; `{ password }` → HttpOnly session cookie; `429` `too_many_attempts` (with `Retry-After`) after 5 wrong passwords from one client in 15 minutes |
 | `POST /api/auth/password` | change password (requires session) |
 | `GET /api/jobs` | each job carries its `lastRun`, `runCount`, and schedule health (`nextDueAt`, `scheduleState`) |
 | `POST /api/jobs/{id}/run` | `202` with the new run id, or `409` `busy` naming the blocking run |
@@ -407,29 +415,47 @@ stored choice is applied before first paint, so the page never flashes.
 
 ## How it maps to restic
 
+Every user value that restic takes as a positional argument (a source folder,
+a snapshot id) goes after `--`, so a value starting with `-` can never be read
+as a restic option.
+
 | Action          | Command run                                              |
 | --------------- | ------------------------------------------------------- |
 | Test connection | `restic -r <repo> cat config`                           |
 | Initialize      | `restic -r <repo> init` (also run automatically by a backup against an uninitialized repository) |
-| Backup          | `restic -r <repo> backup <src> --tag resticweb-job:<id> --json` |
+| Backup          | `restic -r <repo> backup --json --tag resticweb-job:<id> -- <src>` |
 | Database backup | `docker exec <db> pg_dump …` piped into `restic backup --stdin --stdin-filename <db>.sql --tag resticweb-job:<id> --tag resticweb-db:<engine>` |
-| Database restore| safety backup as above, then drop + create, then `restic dump <id> /<db>.sql` piped into `docker exec -i <db> psql …` (or `mariadb`/`mysql`) |
-| Browse snapshot | `restic -r <repo> ls --json <id>`                        |
+| Database restore| safety backup as above, then drop + create, then `restic dump -- <id> /<db>.sql` piped into `docker exec -i <db> psql …` (or `mariadb`/`mysql`) |
+| Browse snapshot | `restic -r <repo> ls --json -- <id>`                     |
 | List snapshots  | `restic -r <repo> snapshots [--tag …] --json`           |
-| Restore         | `restic restore <id> --target … --delete --json` (in-place uses `/` plus `--include` of the folder, or of each selected path) |
-| Download (zip)  | restore into a temp workspace, then stream a zip        |
+| Restore         | `restic restore --target … --delete --json -- <id>` (in-place uses `/` plus `--include` of the folder, or of each selected path) |
+| Download (zip)  | match the id against the snapshot list, restore into a temp workspace, then stream a zip |
 | Unlock          | `restic -r <repo> unlock` (removes only stale locks)    |
 | Retention       | `restic -r <repo> forget --tag … --keep-* --prune --json` |
-| Forget snapshot | `restic -r <repo> forget <id> --prune --json`           |
+| Forget snapshot | `restic -r <repo> forget --json --prune -- <id>`        |
 | Check           | `restic -r <repo> check [--read-data \| --read-data-subset S]` |
-| Speed test      | random data into `restic backup --stdin --tag resticweb-speedtest`, read back with `restic dump`, each timed against a 1 KiB file; then `forget <ids…> --json` (no prune) |
-| Forget job data | list by tag, then `forget <ids…> --prune --json`        |
-| Empty repository| list all snapshots, then `forget <ids…> --prune --json` |
+| Speed test      | random data into `restic backup --stdin --tag resticweb-speedtest`, read back with `restic dump`, each timed against a 1 KiB file; then `forget --json -- <ids…>` (no prune) |
+| Forget job data | list by tag, then `forget --json --prune -- <ids…>`     |
+| Empty repository| list all snapshots, then `forget --json --prune -- <ids…>` |
 
 ## Notes & limitations
 
-- The **login password** is stored as a PBKDF2-SHA256 hash in Postgres. Sessions
-  are in-memory cookies — restarting the app means logging in again.
+- The **login password** is stored as a PBKDF2-SHA256 hash in Postgres and must
+  be at least 12 characters. Sessions are in-memory cookies — restarting the app
+  means logging in again. Logging in is root on the server when the Docker socket
+  is mounted, so the login is hardened:
+  - first-run setup needs the **setup token** from the server log (or
+    `RESTIC_WEB_SETUP_TOKEN`); `restic-webctl auth setup` needs none;
+  - 5 wrong passwords (or setup tokens) from one client within 15 minutes lock
+    that client out for 15 minutes. Behind a reverse proxy on a private address
+    the client is the last `X-Forwarded-For` hop;
+  - the session cookie is `HttpOnly`, `SameSite=Strict`, and `Secure` over HTTPS
+    (`X-Forwarded-Proto: https` from the proxy counts);
+  - every response carries a strict Content-Security-Policy, `X-Frame-Options:
+    DENY`, `nosniff` and, over HTTPS, HSTS;
+  - state-changing requests a browser sends from another origin are refused
+    (`403` `cross_origin`), including from sibling subdomains of the same
+    domain.
 - Secrets (repository passwords, S3 secret keys) are stored **in plaintext** in
   Postgres. Restrict who can reach the database. They are read through a single
   choke point, so encrypting at rest later is a localized change. They are never

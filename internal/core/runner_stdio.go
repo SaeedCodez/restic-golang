@@ -125,7 +125,7 @@ const stdinKillAfter = 2 * time.Second
 func (*resticRunner) Dump(ctx context.Context, repo *Repository, snapshotID, file string, consume func(r io.Reader) error, sink RunSink) (int, error) {
 	rctx, abort := context.WithCancel(ctx)
 	defer abort()
-	cmd, err := resticCommand(rctx, repo, "dump", snapshotID, file)
+	cmd, err := resticCommand(rctx, repo, "dump", "--", snapshotID, file)
 	if err != nil {
 		return -1, err
 	}
@@ -196,7 +196,7 @@ func (*resticRunner) Dump(ctx context.Context, repo *Repository, snapshotID, fil
 }
 
 func (*resticRunner) List(ctx context.Context, repo *Repository, snapshotID string) ([]LsNode, error) {
-	cmd, err := resticCommand(ctx, repo, "ls", "--json", snapshotID)
+	cmd, err := resticCommand(ctx, repo, "ls", "--json", "--", snapshotID)
 	if err != nil {
 		return nil, err
 	}
