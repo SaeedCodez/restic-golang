@@ -81,13 +81,7 @@ export function RetentionEditor({ job, onSaved, stay = false }) {
         return;
       }
     }
-    const res = await Jobs.update(job.id, {
-      name: job.name,
-      folderId: job.folderId,
-      repositoryId: job.repositoryId,
-      schedule: job.schedule || null,
-      retention,
-    });
+    const res = await Jobs.save(job, { retention });
     setBusy(false);
     if (res.ok) {
       toast.success(
