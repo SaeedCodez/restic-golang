@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 )
 
@@ -207,6 +208,42 @@ func (s *Server) handleRepoCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "runId": run.ID, "run": run})
+}
+
+func (s *Server) handleRepoSpeedTest(w http.ResponseWriter, r *http.Request) {
+	if !s.requireRestic(w) {
+		return
+	}
+	var body struct {
+		SizeMB int `json:"sizeMB"`
+	}
+	if !decodeJSONAllowEmpty(w, r, &body) {
+		return
+	}
+	run, err := s.app.Coord.StartSpeedTest(r.PathValue("id"), body.SizeMB)
+	if err != nil {
+		writeStartError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "runId": run.ID, "run": run})
+}
+
+// handleRepoSpeedTests lists a repository's recent speed test results.
+func (s *Server) handleRepoSpeedTests(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, ok := s.app.Repos.Get(id); !ok {
+		errorJSON(w, http.StatusNotFound, "not_found", "repository not found")
+		return
+	}
+	limit := 10
+	if v, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && v > 0 && v <= 100 {
+		limit = v
+	}
+	results := []*SpeedTestView{}
+	for _, run := range s.app.Runs.SpeedTests(id, limit) {
+		results = append(results, SpeedTestViewOf(run))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "results": results})
 }
 
 func (s *Server) handleRepoDownload(w http.ResponseWriter, r *http.Request) {

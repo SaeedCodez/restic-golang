@@ -123,6 +123,56 @@ func (s *RunStore) Query(status, kind, jobID string, limit, offset int) ([]*Run,
 	return overlayRuns(s, out), total
 }
 
+// SpeedTests returns a repository's finished speed tests that produced a
+// result, newest first, at most limit of them.
+func (s *RunStore) SpeedTests(repoID string, limit int) []*Run {
+	ctx, cancel := dbCtx()
+	defer cancel()
+	rows, err := s.Pool.Query(ctx, `SELECT `+runCols+` FROM runs
+		WHERE kind = $1 AND repository_id = $2 AND status = 'success'
+		ORDER BY started_at DESC, id DESC LIMIT $3`, KindSpeedTest, repoID, limit)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []*Run
+	for rows.Next() {
+		run, err := scanRun(rows)
+		if err != nil {
+			break
+		}
+		if run.Summary != nil && run.Summary.Speed != nil {
+			out = append(out, run)
+		}
+	}
+	return out
+}
+
+// latestSpeedTests returns each repository's most recent speed test result,
+// keyed by repository id.
+func (s *RunStore) latestSpeedTests() map[string]*Run {
+	ctx, cancel := dbCtx()
+	defer cancel()
+	rows, err := s.Pool.Query(ctx, `SELECT DISTINCT ON (repository_id) `+runCols+` FROM runs
+		WHERE kind = $1 AND status = 'success'
+		ORDER BY repository_id, started_at DESC, id DESC`, KindSpeedTest)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	out := map[string]*Run{}
+	for rows.Next() {
+		run, err := scanRun(rows)
+		if err != nil {
+			break
+		}
+		if run.Summary != nil && run.Summary.Speed != nil {
+			out[run.RepositoryID] = run
+		}
+	}
+	return out
+}
+
 func runWhere(status, kind, jobID string) (string, []any) {
 	var clauses []string
 	var args []any

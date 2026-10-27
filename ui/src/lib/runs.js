@@ -71,6 +71,7 @@ export const KIND_LABEL = {
   forget: "Forget",
   check: "Check",
   restore_db: "Database restore",
+  speedtest: "Speed test",
 };
 
 export function statusLabel(status) {

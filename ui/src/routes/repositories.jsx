@@ -19,6 +19,7 @@ import { EmptyState, ErrorState, InlineError } from "@/components/empty";
 import { Field, Segmented } from "@/components/fields";
 import { IconTile, repositoryIcon } from "@/components/kind";
 import { StatusDot } from "@/components/status-badge";
+import { SpeedScore } from "@/components/speed-test";
 import { ListPagination } from "@/components/pagination";
 import { Page, PageHeader } from "@/components/page";
 import { useConfirm } from "@/components/confirm";
@@ -27,6 +28,7 @@ import { PAGE_SIZE, pageSlice } from "@/lib/pagination";
 import { useFetch } from "@/lib/use-fetch";
 import { fmtRelative, fmtTime, repoLocation } from "@/lib/format";
 import { statusLabel } from "@/lib/runs";
+import { fmtSpeed } from "@/lib/speed";
 
 const EMPTY = {
   name: "",
@@ -249,7 +251,7 @@ function RepositoryCard({ repo, usage, onEdit, onDelete }) {
         </div>
       </div>
 
-      <dl className="grid grid-cols-3 gap-4 px-5 pb-5">
+      <dl className="grid grid-cols-2 gap-4 px-5 pb-5 sm:grid-cols-4">
         <div className="min-w-0">
           <dt className="text-xs text-muted-foreground">Backend</dt>
           <dd className="mt-1 truncate text-sm font-medium">{backendLabel(repo)}</dd>
@@ -275,6 +277,27 @@ function RepositoryCard({ repo, usage, onEdit, onDelete }) {
               </Tooltip>
             ) : (
               <span className="text-muted-foreground">Never</span>
+            )}
+          </dd>
+        </div>
+        <div className="min-w-0">
+          <dt className="text-xs text-muted-foreground">Speed</dt>
+          <dd className="mt-1 text-sm font-medium">
+            {repo.lastSpeedTest ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="relative inline-flex">
+                    <SpeedScore test={repo.lastSpeedTest} />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Up {fmtSpeed(repo.lastSpeedTest.uploadBytesPerSec)} · down{" "}
+                  {fmtSpeed(repo.lastSpeedTest.downloadBytesPerSec)} · tested{" "}
+                  {fmtRelative(repo.lastSpeedTest.testedAt)}
+                </TooltipContent>
+              </Tooltip>
+            ) : (
+              <span className="text-muted-foreground">Not tested</span>
             )}
           </dd>
         </div>

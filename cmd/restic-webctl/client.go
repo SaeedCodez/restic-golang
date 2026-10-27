@@ -49,6 +49,8 @@ type repoView struct {
 	SecretKey    string `json:"secretKey,omitempty"`
 	HasPassword  bool   `json:"hasPassword"`
 	HasSecretKey bool   `json:"hasSecretKey"`
+	// LastSpeedTest is filled in by repo get only.
+	LastSpeedTest *core.SpeedTestView `json:"lastSpeedTest,omitempty"`
 }
 
 func repoViewOf(repo core.Repository) repoView {

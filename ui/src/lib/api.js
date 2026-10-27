@@ -66,6 +66,10 @@ export const Repositories = {
   test: (id) => api.post(`/api/repositories/${id}/test`),
   init: (id) => api.post(`/api/repositories/${id}/init`),
   unlock: (id) => api.post(`/api/repositories/${id}/unlock`),
+  /** Starts a speed test moving sizeMB of random data each way. */
+  speedTest: (id, sizeMB) => api.post(`/api/repositories/${id}/speedtest`, { sizeMB }),
+  /** Recent speed test results, newest first. */
+  speedTests: (id, limit = 6) => api.get(`/api/repositories/${id}/speedtests?limit=${limit}`),
   snapshots: (id) => api.get(`/api/repositories/${id}/snapshots`),
   /** include limits the restore to those snapshot paths; stopContainers stops
    * the site using the destination while it runs. */
