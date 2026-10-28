@@ -96,15 +96,17 @@ func (*resticRunner) Available() bool { return ResticInstalled() }
 
 func (*resticRunner) Version(ctx context.Context) (string, error) { return resticVersion(ctx) }
 
-// resticCommand builds a restic *exec.Cmd for a repository: repo flag prepended,
-// credentials injected via env, graceful-stop signaling wired up (SIGINT with a
-// hard-kill fallback), and its own process group for orphan handling.
+// resticCommand builds a restic *exec.Cmd for a repository: repo flag and speed
+// limits prepended, credentials injected via env, graceful-stop signaling wired
+// up (SIGINT with a hard-kill fallback), and its own process group for orphan
+// handling.
 func resticCommand(ctx context.Context, repo *Repository, args ...string) (*exec.Cmd, error) {
 	repoStr, err := repo.Repo()
 	if err != nil {
 		return nil, err
 	}
-	full := append([]string{"-r", repoStr}, args...)
+	full := append([]string{"-r", repoStr}, repo.limitArgs()...)
+	full = append(full, args...)
 	cmd := exec.CommandContext(ctx, resticBinary, full...)
 	cmd.Env = repo.Env()
 	// Stop = SIGINT: restic finalizes, removes its lock, and writes no partial

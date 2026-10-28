@@ -191,6 +191,10 @@ func classifyRepoError(text string) error {
 func classifyResticFailure(text string) int {
 	low := strings.ToLower(text)
 	switch {
+	case strings.Contains(low, "repository contains errors"):
+		// restic check opened the repository and found it damaged; its missing
+		// packs ("no such file") must not read as a missing repository.
+		return 0
 	case strings.Contains(low, "wrong password") || strings.Contains(low, "no key found"):
 		return resticExitBadPassword
 	case strings.Contains(low, "unable to open config") ||

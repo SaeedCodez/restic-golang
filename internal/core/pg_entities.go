@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,17 +18,31 @@ type RepoStore struct {
 func newRepoStore(pool *pgxpool.Pool) *RepoStore { return &RepoStore{Pool: pool} }
 
 const repoCols = `id, name, created_at, updated_at, backend_type, local_path,
+	endpoint, bucket, region, access_key, secret_key, password,
+	check_schedule, upload_limit_kib, download_limit_kib`
+
+// repoWriteCols are the columns Create writes; the settings after them have
+// their own setters.
+const repoWriteCols = `id, name, created_at, updated_at, backend_type, local_path,
 	endpoint, bucket, region, access_key, secret_key, password`
 
 func scanRepo(row interface{ Scan(dest ...any) error }) (Repository, error) {
 	var r Repository
 	var localPath, endpoint, bucket, region, accessKey, secretKey *string
+	var check []byte
 	err := row.Scan(
 		&r.ID, &r.Name, &r.CreatedAt, &r.UpdatedAt, &r.BackendType, &localPath,
 		&endpoint, &bucket, &region, &accessKey, &secretKey, &r.Password,
+		&check, &r.UploadLimitKiB, &r.DownloadLimitKiB,
 	)
 	if err != nil {
 		return Repository{}, err
+	}
+	if len(check) > 0 {
+		var c RepoCheckSchedule
+		if json.Unmarshal(check, &c) == nil {
+			r.CheckSchedule = &c
+		}
 	}
 	if localPath != nil {
 		r.LocalPath = *localPath
@@ -103,7 +118,8 @@ func (s *RepoStore) Create(item Repository) (Repository, error) {
 	item.UpdatedAt = now
 	ctx, cancel := dbCtx()
 	defer cancel()
-	_, err = s.Pool.Exec(ctx, `INSERT INTO repositories (`+repoCols+`)
+	item.CheckSchedule, item.UploadLimitKiB, item.DownloadLimitKiB = nil, 0, 0
+	_, err = s.Pool.Exec(ctx, `INSERT INTO repositories (`+repoWriteCols+`)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
 		item.ID, item.Name, item.CreatedAt, item.UpdatedAt, item.BackendType, emptyToNil(item.LocalPath),
 		emptyToNil(item.Endpoint), emptyToNil(item.Bucket), emptyToNil(item.Region),
@@ -132,6 +148,9 @@ func (s *RepoStore) Update(id string, item Repository) (Repository, error) {
 	item.Name = name
 	item.CreatedAt = prev.CreatedAt
 	item.UpdatedAt = time.Now().UTC().Truncate(time.Microsecond)
+	// An edit never changes the settings that have their own setters.
+	item.CheckSchedule = prev.CheckSchedule
+	item.UploadLimitKiB, item.DownloadLimitKiB = prev.UploadLimitKiB, prev.DownloadLimitKiB
 	ctx, cancel := dbCtx()
 	defer cancel()
 	tag, err := s.Pool.Exec(ctx, `UPDATE repositories SET
@@ -152,6 +171,44 @@ func (s *RepoStore) Update(id string, item Repository) (Repository, error) {
 		return zero, notFoundf("repository not found")
 	}
 	return item, nil
+}
+
+// SetCheckSchedule saves a repository's check schedule (nil turns it off).
+func (s *RepoStore) SetCheckSchedule(id string, c *RepoCheckSchedule) (Repository, error) {
+	var check any
+	if c != nil {
+		b, err := json.Marshal(c)
+		if err != nil {
+			return Repository{}, err
+		}
+		check = b
+	}
+	return s.setSettings(id, `check_schedule=$2`, check)
+}
+
+// SetSpeedLimit saves a repository's upload and download limits in KiB/s.
+func (s *RepoStore) SetSpeedLimit(id string, uploadKiB, downloadKiB int) (Repository, error) {
+	return s.setSettings(id, `upload_limit_kib=$2, download_limit_kib=$3`, uploadKiB, downloadKiB)
+}
+
+func (s *RepoStore) setSettings(id, set string, values ...any) (Repository, error) {
+	ctx, cancel := dbCtx()
+	defer cancel()
+	args := append([]any{id}, values...)
+	args = append(args, time.Now().UTC().Truncate(time.Microsecond))
+	updated := "$" + strconv.Itoa(len(args))
+	tag, err := s.Pool.Exec(ctx, `UPDATE repositories SET `+set+`, updated_at=`+updated+` WHERE id=$1`, args...)
+	if err != nil {
+		return Repository{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return Repository{}, notFoundf("repository not found")
+	}
+	repo, ok := s.Get(id)
+	if !ok {
+		return Repository{}, notFoundf("repository not found")
+	}
+	return repo, nil
 }
 
 func (s *RepoStore) Delete(id string) error {

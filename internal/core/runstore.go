@@ -173,6 +173,43 @@ func (s *RunStore) latestSpeedTests() map[string]*Run {
 	return out
 }
 
+// latestChecks is each repository's newest finished check run.
+func (s *RunStore) latestChecks() map[string]*Run {
+	ctx, cancel := dbCtx()
+	defer cancel()
+	rows, err := s.Pool.Query(ctx, `SELECT DISTINCT ON (repository_id) `+runCols+` FROM runs
+		WHERE kind = $1 AND status IN ('success','success_warnings','failed','canceled','interrupted')
+		ORDER BY repository_id, started_at DESC, id DESC`, KindCheck)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	out := map[string]*Run{}
+	for rows.Next() {
+		run, err := scanRun(rows)
+		if err != nil {
+			break
+		}
+		out[run.RepositoryID] = run
+	}
+	return out
+}
+
+// lastCheckStart is when the repository's newest check run started, finished
+// or not (nil if it was never checked).
+func (s *RunStore) lastCheckStart(repoID string) *time.Time {
+	ctx, cancel := dbCtx()
+	defer cancel()
+	var t time.Time
+	err := s.Pool.QueryRow(ctx, `SELECT started_at FROM runs WHERE repository_id = $1 AND kind = $2
+		ORDER BY started_at DESC, id DESC LIMIT 1`, repoID, KindCheck).Scan(&t)
+	if err != nil {
+		return nil
+	}
+	t = t.UTC()
+	return &t
+}
+
 func runWhere(status, kind, jobID string) (string, []any) {
 	var clauses []string
 	var args []any

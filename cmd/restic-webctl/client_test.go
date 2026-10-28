@@ -136,3 +136,11 @@ func TestResticCallErrorTimeout(t *testing.T) {
 		t.Fatalf("canceled code = %q", ae.Code)
 	}
 }
+
+func TestFmtLimit(t *testing.T) {
+	for kib, want := range map[int]string{0: "none", -1: "none", 1024: "1 MB/s", 5120: "5 MB/s", 512: "0.5 MB/s"} {
+		if got := fmtLimit(kib); got != want {
+			t.Errorf("fmtLimit(%d) = %q, want %q", kib, got, want)
+		}
+	}
+}

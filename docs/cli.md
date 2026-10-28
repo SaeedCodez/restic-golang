@@ -222,6 +222,9 @@ restic-webctl repo init <id|name> [--wait]
 restic-webctl repo unlock <id|name>
 restic-webctl repo check <id|name> [--read-data | --read-data-subset S] [--wait]
 restic-webctl repo speedtest <id|name> [--size MB] [--wait] [--follow]
+restic-webctl repo check-schedule <id|name> [--every daily|weekly|monthly] [--at HH:MM] [--read-data PCT]
+restic-webctl repo check-schedule <id|name> --off
+restic-webctl repo speed-limit <id|name> [--upload MB/s] [--download MB/s]
 restic-webctl repo snapshots <id|name>
 restic-webctl repo restore <id|name> --snapshot ID --target PATH [--wait]
 # Restore replaces the destination: snapshot files overwrite, extras are deleted.
@@ -257,6 +260,29 @@ also reads and verifies every data pack (slow, downloads everything from S3);
 If restic finds damage, the run fails with `error` "the repository check found
 errors" and the run log (`run log <runId>`) holds restic's details and
 suggested `restic repair …` commands. The app never runs repairs itself.
+
+`repo check-schedule` makes the app check the repository on its own: `--every`
+`daily`, `weekly` (the default) or `monthly`, at `--at` local time (default
+`04:00`). `--read-data 5%` also reads that share of the data each time (1% to
+100%). The first check runs at the first `--at` after the schedule is saved;
+after that, at the first `--at` once the period has passed since the last
+check, so a manual `repo check` postpones it. Backups and scheduled checks of a
+repository never run at once: a backup due at the same time goes first, and
+the check starts when the repository is free. Scheduled check runs carry
+`params.trigger: "schedule"`. `--off` stops the schedule and keeps its
+settings. `repo get` and `GET /api/repositories` show the schedule as
+`checkSchedule`, the newest finished check as `lastCheck`, and `nextCheckAt`.
+
+`repo speed-limit` caps how fast restic moves data for this repository, in MB/s
+(1 MB = 1024 KB, the unit speeds are shown in): `--upload` for what backups
+send, `--download` for what restores, downloads and checks read. They become
+restic's `--limit-upload` / `--limit-download` (KiB/s) on every command for
+the repository except the speed test. A flag left out keeps its value; `0`
+removes the limit. The repository JSON carries them as `uploadLimitKiB` and
+`downloadLimitKiB`.
+
+Neither setting changes with `repo update`, and a new repository starts with
+neither.
 
 `repo speedtest` measures how fast the repository takes and returns data, as a
 tracked run (kind `speedtest`). It backs up `--size` MB (default 64, at most

@@ -28,6 +28,7 @@ import { useFetch } from "@/lib/use-fetch";
 import { useLive } from "@/lib/live";
 import { fmtRelative, repoLocation } from "@/lib/format";
 import { describeScheduleTitle } from "@/lib/schedule";
+import { Callout } from "@/components/fields";
 import { cn } from "@/lib/utils";
 
 const ATTENTION_CAP = 5;
@@ -100,7 +101,7 @@ const HEALTH_TONE = {
  * HealthHero answers the one question the dashboard exists for — are my
  * backups OK? — in a sentence, coloured by the answer.
  */
-function HealthHero({ jobs, attention, strips, upcoming, running }) {
+function HealthHero({ jobs, attention, strips, upcoming, running, failedChecks = 0 }) {
   const failed = attention.filter((a) => a.failedLast).length;
   const overdue = attention.filter((a) => a.overdue).length;
   const neverRun = jobs.filter((j) => !j.lastRun).length;
@@ -122,6 +123,11 @@ function HealthHero({ jobs, attention, strips, upcoming, running }) {
     detail = `The last run ${failed === 1 ? "of this job" : "of these jobs"} failed or was interrupted.${
       overdue > 0 ? ` ${overdue} scheduled backup${overdue === 1 ? " is" : "s are"} overdue as well.` : ""
     }`;
+  } else if (failedChecks > 0) {
+    tone = "destructive";
+    icon = ShieldAlert;
+    headline = `${failedChecks} repositor${failedChecks === 1 ? "y is" : "ies are"} damaged`;
+    detail = "The last runs succeeded, but a repository check found errors in stored backups.";
   } else if (overdue > 0) {
     tone = "warning";
     icon = Clock;
@@ -404,6 +410,33 @@ function RepositoryCards({ repositories, jobs }) {
   );
 }
 
+/** FailedChecksCallout names the repositories whose last check found errors. */
+function FailedChecksCallout({ repositories }) {
+  return (
+    <Callout
+      tone="destructive"
+      icon={ShieldAlert}
+      title={
+        repositories.length === 1
+          ? "A repository check found errors"
+          : `${repositories.length} repository checks found errors`
+      }
+    >
+      Backups stored there may not restore completely. Open the check's log to see what is
+      damaged:{" "}
+      {repositories.map((repo, i) => (
+        <React.Fragment key={repo.id}>
+          {i > 0 ? ", " : null}
+          <Link to={`/runs/${repo.lastCheck.runId}`} className="font-medium underline">
+            {repo.name}
+          </Link>
+        </React.Fragment>
+      ))}
+      .
+    </Callout>
+  );
+}
+
 async function mergeRecentBackupFailures() {
   const [failedR, interruptedR] = await Promise.all([
     Runs.list({ status: "failed", kind: "backup", limit: FAILURES_CAP }),
@@ -507,6 +540,7 @@ export default function Dashboard() {
     runsVersion,
   );
   const repositories = data?.repositories || [];
+  const failedChecks = repositories.filter((r) => r.lastCheck?.status === "failed");
 
   const repoCount = statusData?.counts?.repositories ?? 0;
   // Folders and databases are both sources a job can back up.
@@ -550,6 +584,7 @@ export default function Dashboard() {
                 strips={strips}
                 upcoming={upcoming}
                 running={activeRuns.length}
+                failedChecks={failedChecks.length}
               />
             ) : null}
 
@@ -560,6 +595,8 @@ export default function Dashboard() {
               scheduledCount={scheduledTotal}
             />
           </div>
+
+          {failedChecks.length > 0 ? <FailedChecksCallout repositories={failedChecks} /> : null}
 
           <ActiveRunsCard
             runs={activeRuns}

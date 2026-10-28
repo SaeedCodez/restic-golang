@@ -70,6 +70,8 @@ export const Repositories = {
   speedTest: (id, sizeMB) => api.post(`/api/repositories/${id}/speedtest`, { sizeMB }),
   /** Recent speed test results, newest first. */
   speedTests: (id, limit = 6) => api.get(`/api/repositories/${id}/speedtests?limit=${limit}`),
+  setCheckSchedule: (id, schedule) => api.put(`/api/repositories/${id}/check-schedule`, schedule),
+  setSpeedLimit: (id, limits) => api.put(`/api/repositories/${id}/speed-limit`, limits),
   snapshots: (id) => api.get(`/api/repositories/${id}/snapshots`),
   /** include limits the restore to those snapshot paths; stopContainers stops
    * the site using the destination while it runs. */
