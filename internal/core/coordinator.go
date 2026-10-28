@@ -719,6 +719,12 @@ func (c *Coordinator) StartResetRepo(repoID string) (*Run, error) {
 // run. readData is "" for a structure-only check, "all" to read every data pack,
 // or a --read-data-subset value such as "10%".
 func (c *Coordinator) StartCheck(repoID, readData string) (*Run, error) {
+	return c.StartCheckTriggered(repoID, readData, TriggerManual)
+}
+
+// StartCheckTriggered is StartCheck with the reason it started ("manual" or
+// "schedule"); a scheduled check is marked so on the run and in its log.
+func (c *Coordinator) StartCheckTriggered(repoID, readData, trigger string) (*Run, error) {
 	repo, ok := c.app.Repos.Get(repoID)
 	if !ok {
 		return nil, notFoundf("repository not found")
@@ -731,11 +737,17 @@ func (c *Coordinator) StartCheck(repoID, readData string) (*Run, error) {
 	if readData != "" {
 		params["readData"] = readData
 	}
+	if trigger == TriggerSchedule {
+		params["trigger"] = trigger
+	}
 	run := &Run{
 		Kind: KindCheck, Status: StatusStarting, RepositoryID: repo.ID, RepoName: repo.Name,
 		Params: params,
 	}
 	return c.startRun(repo, run, func(ctx context.Context, h *runHandle) (int, error) {
+		if trigger == TriggerSchedule && repo.CheckSchedule != nil {
+			h.Log("info", "system", "Started by schedule ("+repo.CheckSchedule.Describe()+").")
+		}
 		switch readData {
 		case "":
 			h.Log("info", "system", "Checking repository "+repo.Name+" (structure and metadata)")

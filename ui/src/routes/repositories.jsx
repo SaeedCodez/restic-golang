@@ -29,6 +29,8 @@ import { useFetch } from "@/lib/use-fetch";
 import { fmtRelative, fmtTime, repoLocation } from "@/lib/format";
 import { statusLabel } from "@/lib/runs";
 import { fmtSpeed } from "@/lib/speed";
+import { cn } from "@/lib/utils";
+import { checkOutcome, describeCheck } from "@/components/repo-settings";
 
 const EMPTY = {
   name: "",
@@ -251,7 +253,7 @@ function RepositoryCard({ repo, usage, onEdit, onDelete }) {
         </div>
       </div>
 
-      <dl className="grid grid-cols-2 gap-4 px-5 pb-5 sm:grid-cols-4">
+      <dl className="grid grid-cols-2 gap-4 px-5 pb-5 sm:grid-cols-3 xl:grid-cols-5">
         <div className="min-w-0">
           <dt className="text-xs text-muted-foreground">Backend</dt>
           <dd className="mt-1 truncate text-sm font-medium">{backendLabel(repo)}</dd>
@@ -298,6 +300,32 @@ function RepositoryCard({ repo, usage, onEdit, onDelete }) {
               </Tooltip>
             ) : (
               <span className="text-muted-foreground">Not tested</span>
+            )}
+          </dd>
+        </div>
+        <div className="min-w-0">
+          <dt className="text-xs text-muted-foreground">Check</dt>
+          <dd className="mt-1 flex items-center gap-2 text-sm font-medium">
+            {repo.lastCheck ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span
+                    className={cn(
+                      "relative flex min-w-0 items-center gap-2",
+                      repo.lastCheck.status === "failed" && "text-destructive",
+                    )}
+                  >
+                    <StatusDot status={repo.lastCheck.status} />
+                    <span className="truncate">{fmtRelative(repo.lastCheck.finishedAt || repo.lastCheck.startedAt)}</span>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {checkOutcome(repo.lastCheck)}
+                  {repo.checkSchedule?.enabled ? ` · ${describeCheck(repo.checkSchedule)}` : " · not scheduled"}
+                </TooltipContent>
+              </Tooltip>
+            ) : (
+              <span className="text-muted-foreground">{repo.checkSchedule?.enabled ? "Scheduled" : "Never"}</span>
             )}
           </dd>
         </div>

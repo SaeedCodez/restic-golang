@@ -79,6 +79,8 @@ func helpRepo() string {
   restic-webctl repo unlock <id|name>
   restic-webctl repo check <id|name> [--read-data | --read-data-subset S] [--wait] [--follow]
   restic-webctl repo speedtest <id|name> [--size MB] [--wait] [--follow]
+  restic-webctl repo check-schedule <id|name> [--every daily|weekly|monthly] [--at HH:MM] [--read-data PCT] | --off
+  restic-webctl repo speed-limit <id|name> [--upload MB/s] [--download MB/s]
   restic-webctl repo snapshots <id|name>
   restic-webctl repo files <id|name> --snapshot ID [--path DIR]
   restic-webctl repo restore <id|name> --snapshot ID --target PATH [--include P]… [--stop-containers] [--wait]
@@ -95,7 +97,16 @@ check verifies repository structure; --read-data also reads every data pack,
 
 speedtest backs up --size MB (default 64) of random data and reads it back,
 then scores the repository 0-100 (summary.speed). The test snapshots are
-forgotten; their space is reclaimed at the next prune.
+forgotten; their space is reclaimed at the next prune. Speed limits do not
+apply to it.
+
+check-schedule checks the repository on its own (default: weekly at 04:00,
+structure only); --read-data 5% also downloads and verifies 5% of the data
+each time. Backups to the repository wait while it is checked. --off stops it.
+
+speed-limit caps how fast restic sends data to (--upload: backups) and reads
+data from (--download: restores, downloads, checks) the repository, so the
+sites on the server stay fast during a backup. 0 removes a limit.
 
 restore replaces the destination (files not in the snapshot are deleted). With
 --include only the given snapshot paths are restored and replaced.

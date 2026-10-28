@@ -55,6 +55,8 @@ func (s *Server) Routes(static http.Handler) http.Handler {
 	mux.HandleFunc("POST /api/repositories/{id}/check", s.handleRepoCheck)
 	mux.HandleFunc("POST /api/repositories/{id}/speedtest", s.handleRepoSpeedTest)
 	mux.HandleFunc("GET /api/repositories/{id}/speedtests", s.handleRepoSpeedTests)
+	mux.HandleFunc("PUT /api/repositories/{id}/check-schedule", s.handleRepoCheckSchedule)
+	mux.HandleFunc("PUT /api/repositories/{id}/speed-limit", s.handleRepoSpeedLimit)
 
 	mux.HandleFunc("POST /api/repositories/{id}/restore-db", s.handleRepoRestoreDatabase)
 	mux.HandleFunc("GET /api/repositories/{id}/snapshots/{sid}/ls", s.handleSnapshotLs)

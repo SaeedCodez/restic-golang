@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -67,6 +69,16 @@ func (c *CLI) cmdRepo(args []string) int {
 			return c.fail(err)
 		}
 		return c.repoSpeedTest(args[1], args[2:])
+	case "check-schedule":
+		if err := requireArgs(args[1:], 1, helpRepo()); err != nil {
+			return c.fail(err)
+		}
+		return c.repoCheckSchedule(args[1], args[2:])
+	case "speed-limit":
+		if err := requireArgs(args[1:], 1, helpRepo()); err != nil {
+			return c.fail(err)
+		}
+		return c.repoSpeedLimit(args[1], args[2:])
 	case "snapshots", "snaps":
 		if err := requireArgs(args[1:], 1, helpRepo()); err != nil {
 			return c.fail(err)
@@ -160,6 +172,13 @@ func (c *CLI) repoGet(query string) int {
 		fmt.Printf("hasSecretKey:\t%v\n", v.HasSecretKey)
 	}
 	fmt.Printf("hasPassword:\t%v\n", v.HasPassword)
+	if cs := v.CheckSchedule; cs != nil && cs.Enabled {
+		fmt.Printf("checkSchedule:\t%s\n", cs.Describe())
+	} else {
+		fmt.Printf("checkSchedule:\toff\n")
+	}
+	fmt.Printf("uploadLimit:\t%s\n", fmtLimit(v.UploadLimitKiB))
+	fmt.Printf("downloadLimit:\t%s\n", fmtLimit(v.DownloadLimitKiB))
 	if st := v.LastSpeedTest; st != nil {
 		fmt.Printf("speed:\t%d/100 %s (up %.1f MB/s, down %.1f MB/s, %s)\n", st.Score, st.Rating,
 			st.UploadBytesPerSec/(1<<20), st.DownloadBytesPerSec/(1<<20), st.TestedAt.Local().Format(time.RFC3339))
@@ -439,6 +458,71 @@ func (c *CLI) repoSpeedTest(query string, args []string) int {
 	}
 	run, err := c.app.Coord.StartSpeedTest(repo.ID, *size)
 	return c.startAndMaybeWait(run, err, wait, follow)
+}
+
+func (c *CLI) repoCheckSchedule(query string, args []string) int {
+	repo, err := c.resolveRepo(query)
+	if err != nil {
+		return c.fail(err)
+	}
+	args, off := hasBoolFlag(args, "--off")
+	fs := newFlagSet("repo check-schedule")
+	every := fs.String("every", "", "daily, weekly or monthly (default weekly)")
+	at := fs.String("at", "", "local time HH:MM (default 04:00)")
+	readData := fs.String("read-data", "", "percentage of the data to read each time, e.g. 5%")
+	if err := parseFlagSet(fs, args, helpRepo()); err != nil {
+		return c.fail(err)
+	}
+	sched := core.RepoCheckSchedule{Enabled: !off, Every: *every, At: *at, ReadData: *readData}
+	if off && repo.CheckSchedule != nil {
+		sched = *repo.CheckSchedule
+		sched.Enabled = false
+	}
+	updated, err := c.app.SetRepoCheckSchedule(repo.ID, sched)
+	if err != nil {
+		return c.fail(err)
+	}
+	msg := "Automatic check turned off."
+	if updated.CheckSchedule != nil && updated.CheckSchedule.Enabled {
+		msg = "Automatic check: " + updated.CheckSchedule.Describe() + "."
+	}
+	return c.okMessage(msg, map[string]any{"repository": repoViewOf(updated)})
+}
+
+// repoSpeedLimit sets the limits in MB/s (1 MB = 1024 KiB, the unit the app
+// shows speeds in); a limit left out stays as it is, and 0 removes it.
+func (c *CLI) repoSpeedLimit(query string, args []string) int {
+	repo, err := c.resolveRepo(query)
+	if err != nil {
+		return c.fail(err)
+	}
+	fs := newFlagSet("repo speed-limit")
+	upload := fs.Float64("upload", -1, "upload limit in MB/s (0 = no limit)")
+	download := fs.Float64("download", -1, "download limit in MB/s (0 = no limit)")
+	if err := parseFlagSet(fs, args, helpRepo()); err != nil {
+		return c.fail(err)
+	}
+	up, down := repo.UploadLimitKiB, repo.DownloadLimitKiB
+	if *upload >= 0 {
+		up = int(math.Round(*upload * 1024))
+	}
+	if *download >= 0 {
+		down = int(math.Round(*download * 1024))
+	}
+	updated, err := c.app.SetRepoSpeedLimit(repo.ID, up, down)
+	if err != nil {
+		return c.fail(err)
+	}
+	msg := fmt.Sprintf("Upload limit: %s. Download limit: %s.", fmtLimit(updated.UploadLimitKiB), fmtLimit(updated.DownloadLimitKiB))
+	return c.okMessage(msg, map[string]any{"repository": repoViewOf(updated)})
+}
+
+// fmtLimit shows a speed limit in KiB/s as MB/s.
+func fmtLimit(kib int) string {
+	if kib <= 0 {
+		return "none"
+	}
+	return strconv.FormatFloat(float64(kib)/1024, 'f', -1, 64) + " MB/s"
 }
 
 func (c *CLI) repoSnapshots(query string) int {

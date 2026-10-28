@@ -12,6 +12,7 @@ import { IconTile, KindTile, repositoryIcon } from "@/components/kind";
 import { RepositoryDialog, backendLabel } from "@/routes/repositories";
 import { SnapshotsPanel } from "@/components/snapshots-panel";
 import { SpeedTestCard } from "@/components/speed-test";
+import { CheckScheduleCard, SpeedLimitCard } from "@/components/repo-settings";
 import { StatusDot } from "@/components/status-badge";
 import { useConfirm } from "@/components/confirm";
 import NotFound from "@/routes/not-found";
@@ -272,6 +273,10 @@ export default function RepositoryDetail() {
           </Card>
 
           <SpeedTestCard repositoryId={id} />
+
+          <CheckScheduleCard repo={repo} onSaved={reload} />
+
+          <SpeedLimitCard repo={repo} onSaved={reload} />
 
           <Card>
             <CardHeader>

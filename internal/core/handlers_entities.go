@@ -70,6 +70,10 @@ type repoView struct {
 	HasSecretKey bool   `json:"hasSecretKey"`
 	// LastSpeedTest is the newest speed test result, if the repository has one.
 	LastSpeedTest *SpeedTestView `json:"lastSpeedTest,omitempty"`
+	// LastCheck is the newest finished check, if the repository was checked.
+	LastCheck *CheckView `json:"lastCheck,omitempty"`
+	// NextCheckAt is when the scheduled check is next due (absent when off).
+	NextCheckAt *time.Time `json:"nextCheckAt,omitempty"`
 }
 
 // SpeedTestView is one speed test result and the run that measured it.
@@ -119,7 +123,7 @@ func repoViewsOf(repos []Repository) []repoView {
 }
 
 func (s *Server) handleRepoList(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "repositories": s.withSpeedTests(repoViewsOf(s.app.Repos.List()))})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "repositories": s.withChecks(s.withSpeedTests(repoViewsOf(s.app.Repos.List())))})
 }
 
 func (s *Server) handleRepoCreate(w http.ResponseWriter, r *http.Request) {
@@ -145,7 +149,7 @@ func (s *Server) handleRepoGet(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, http.StatusNotFound, "not_found", "repository not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "repository": s.withSpeedTests([]repoView{repoViewOf(repo)})[0]})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "repository": s.withChecks(s.withSpeedTests([]repoView{repoViewOf(repo)}))[0]})
 }
 
 func (s *Server) handleRepoUpdate(w http.ResponseWriter, r *http.Request) {
@@ -388,8 +392,8 @@ func (s *Server) attachScheduleView(v *jobView, job Job, backupRunning bool) {
 	}
 	now := time.Now()
 	lastAttempt, lastOK, lastSuccess := s.app.Runs.backupTiming(job.ID)
-	v.NextDueAt = nextDueAt(job.Schedule, lastAttempt, lastOK, now)
-	v.ScheduleState = deriveScheduleState(job.Schedule, lastAttempt, lastOK, lastSuccess, backupRunning, now)
+	v.NextDueAt = nextDueAt(job.Schedule, job.UpdatedAt, lastAttempt, lastOK, now)
+	v.ScheduleState = deriveScheduleState(job.Schedule, job.UpdatedAt, lastAttempt, lastOK, lastSuccess, backupRunning, now)
 }
 
 func (s *Server) viewOf(job Job) jobView {

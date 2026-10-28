@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -53,6 +54,122 @@ type Repository struct {
 
 	// Common: the restic repository password used for encryption (required).
 	Password string `json:"password"`
+
+	// The settings below are saved through their own endpoints (SetCheckSchedule,
+	// SetSpeedLimit); creating or editing a repository leaves them as they are.
+
+	// CheckSchedule, when enabled, checks the repository with `restic check` on
+	// its own.
+	CheckSchedule *RepoCheckSchedule `json:"checkSchedule,omitempty"`
+	// UploadLimitKiB and DownloadLimitKiB cap how fast restic sends data to and
+	// reads data from this repository, in KiB/s (restic's --limit-upload and
+	// --limit-download); 0 means no limit.
+	UploadLimitKiB   int `json:"uploadLimitKiB"`
+	DownloadLimitKiB int `json:"downloadLimitKiB"`
+}
+
+// maxSpeedLimitKiB bounds a speed limit at 10 GiB/s, far above any real link.
+const maxSpeedLimitKiB = 10 << 20
+
+// ValidateSpeedLimit checks an upload or download limit in KiB/s.
+func ValidateSpeedLimit(kib int) error {
+	if kib < 0 || kib > maxSpeedLimitKiB {
+		return validf("a speed limit must be between 0 (no limit) and %d KiB/s", maxSpeedLimitKiB)
+	}
+	return nil
+}
+
+// limitArgs are restic's global flags for the repository's speed limits.
+func (r *Repository) limitArgs() []string {
+	var args []string
+	if r.UploadLimitKiB > 0 {
+		args = append(args, "--limit-upload", strconv.Itoa(r.UploadLimitKiB))
+	}
+	if r.DownloadLimitKiB > 0 {
+		args = append(args, "--limit-download", strconv.Itoa(r.DownloadLimitKiB))
+	}
+	return args
+}
+
+// ---- Repository check schedule ----------------------------------------------
+
+// How often a scheduled repository check runs.
+const (
+	CheckEveryDay   = "daily"
+	CheckEveryWeek  = "weekly"
+	CheckEveryMonth = "monthly"
+)
+
+// defaultCheckAt is when a scheduled check runs if no time is set: a quiet
+// hour, since backups to the repository wait while it is checked.
+const defaultCheckAt = "04:00"
+
+// checkReadDataPattern is a percentage of the stored data for a check to read.
+var checkReadDataPattern = regexp.MustCompile(`^([1-9][0-9]?|100)%$`)
+
+// RepoCheckSchedule checks a repository on its own, so damage in its stored
+// data shows up before a restore needs that data. The first check runs at the
+// first At after the schedule was saved (Since); after that, at the first At
+// once Every has passed since the last check, a manual check included.
+type RepoCheckSchedule struct {
+	Enabled bool   `json:"enabled"`
+	Every   string `json:"every"` // daily | weekly | monthly
+	At      string `json:"at"`    // "HH:MM", local time
+	// ReadData is "" to check the repository's structure only, or a percentage
+	// ("5%") of the stored data to download and verify each time.
+	ReadData string `json:"readData,omitempty"`
+	// Since is when the schedule was saved; the server sets it.
+	Since time.Time `json:"since"`
+}
+
+// Normalize fills in defaults: weekly, at defaultCheckAt.
+func (c *RepoCheckSchedule) Normalize() {
+	c.Every = strings.ToLower(strings.TrimSpace(c.Every))
+	if c.Every == "" {
+		c.Every = CheckEveryWeek
+	}
+	c.At = strings.TrimSpace(c.At)
+	if c.At == "" {
+		c.At = defaultCheckAt
+	}
+	c.ReadData = strings.TrimSpace(c.ReadData)
+}
+
+// Validate checks a normalized schedule.
+func (c *RepoCheckSchedule) Validate() error {
+	if c.period() == 0 {
+		return validf(`how often must be "daily", "weekly" or "monthly"`)
+	}
+	if _, _, err := parseClock(c.At); err != nil {
+		return validf("the check time must be HH:MM, e.g. 04:00")
+	}
+	if c.ReadData != "" && !checkReadDataPattern.MatchString(c.ReadData) {
+		return validf(`the data to read must be empty or a percentage from 1%% to 100%%, e.g. "5%%"`)
+	}
+	return nil
+}
+
+// Describe is a short summary, e.g. "weekly at 04:00, reading 5% of the data".
+func (c *RepoCheckSchedule) Describe() string {
+	s := c.Every + " at " + c.At
+	if c.ReadData != "" {
+		s += ", reading " + c.ReadData + " of the data"
+	}
+	return s
+}
+
+// period is the time between scheduled checks.
+func (c *RepoCheckSchedule) period() time.Duration {
+	switch c.Every {
+	case CheckEveryDay:
+		return 24 * time.Hour
+	case CheckEveryWeek:
+		return 7 * 24 * time.Hour
+	case CheckEveryMonth:
+		return 30 * 24 * time.Hour
+	default:
+		return 0
+	}
 }
 
 // Repo returns the restic repository string for this backend, e.g.

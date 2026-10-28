@@ -52,31 +52,31 @@ func TestJobDueInterval(t *testing.T) {
 	now := atLocal(t, "2006-01-02 15:04", "2026-08-26 15:00")
 
 	// Never run → due immediately.
-	if !jobDue(sched, nil, false, now) {
+	if !jobDue(sched, time.Time{}, nil, false, now) {
 		t.Fatal("never-run interval should be due")
 	}
 
 	// Success 2h ago → not due.
 	last := now.Add(-2 * time.Hour)
-	if jobDue(sched, &last, true, now) {
+	if jobDue(sched, time.Time{}, &last, true, now) {
 		t.Fatal("should not be due within period after success")
 	}
 
 	// Success 7h ago → due.
 	last = now.Add(-7 * time.Hour)
-	if !jobDue(sched, &last, true, now) {
+	if !jobDue(sched, time.Time{}, &last, true, now) {
 		t.Fatal("should be due after period")
 	}
 
 	// Failed 30m ago → not yet (retry is 1h).
 	last = now.Add(-30 * time.Minute)
-	if jobDue(sched, &last, false, now) {
+	if jobDue(sched, time.Time{}, &last, false, now) {
 		t.Fatal("should not retry sooner than 1h after failure")
 	}
 
 	// Failed 90m ago → due (retry).
 	last = now.Add(-90 * time.Minute)
-	if !jobDue(sched, &last, false, now) {
+	if !jobDue(sched, time.Time{}, &last, false, now) {
 		t.Fatal("should retry after 1h on failure")
 	}
 }
@@ -84,50 +84,56 @@ func TestJobDueInterval(t *testing.T) {
 func TestJobDueDaily(t *testing.T) {
 	sched := &JobSchedule{Enabled: true, Kind: ScheduleDaily, At: "02:00"}
 
-	// Enable at 15:00, never run → wait for tomorrow 02:00.
-	now := atLocal(t, "2006-01-02 15:04", "2026-08-26 15:00")
-	if jobDue(sched, nil, false, now) {
+	// Saved at 15:00, never run → wait for tomorrow 02:00.
+	saved := atLocal(t, "2006-01-02 15:04", "2026-08-26 15:00")
+	now := saved
+	if jobDue(sched, saved, nil, false, now) {
 		t.Fatal("never-run daily should wait for next At")
 	}
-	next := nextDueAt(sched, nil, false, now)
+	next := nextDueAt(sched, saved, nil, false, now)
 	want := atLocal(t, "2006-01-02 15:04", "2026-08-27 02:00")
 	if next == nil || !next.Equal(want) {
 		t.Fatalf("nextDueAt = %v, want %v", next, want)
 	}
 
-	// Known limitation: never-run daily with no sticky anchor. If the process is
-	// down across that first At and wakes afterward, nextDueAt recomputes from
-	// "now" and defers another day (catch-up needs a prior attempt — see below).
-	later := atLocal(t, "2006-01-02 15:04", "2026-08-27 02:01")
-	if jobDue(sched, nil, false, later) {
-		t.Fatal("never-run daily after missing first At currently waits for the following day")
+	// The first slot comes due: a tick just after it (ticks never land on the
+	// exact instant) starts the never-run job, and so does the first tick
+	// after the app was down across it.
+	for _, at := range []string{"2026-08-27 02:00", "2026-08-27 02:01", "2026-08-28 10:00"} {
+		if !jobDue(sched, saved, nil, false, atLocal(t, "2006-01-02 15:04", at).Add(15*time.Second)) {
+			t.Fatalf("never-run daily saved at 15:00 is not due at %s", at)
+		}
+	}
+	// Without a save time it falls back to waiting for the next slot from now.
+	if jobDue(sched, time.Time{}, nil, false, atLocal(t, "2006-01-02 15:04", "2026-08-27 02:01")) {
+		t.Fatal("never-run daily without a save time should wait for the next At")
 	}
 
 	// Catch-up: last attempt yesterday 01:00, now 10:00 → missed 02:00 → due.
 	last := atLocal(t, "2006-01-02 15:04", "2026-08-25 01:00")
 	now = atLocal(t, "2006-01-02 15:04", "2026-08-26 10:00")
-	if !jobDue(sched, &last, true, now) {
+	if !jobDue(sched, time.Time{}, &last, true, now) {
 		t.Fatal("missed daily slot should catch up")
 	}
 
 	// Success today at 02:05 → next is tomorrow.
 	last = atLocal(t, "2006-01-02 15:04", "2026-08-26 02:05")
 	now = atLocal(t, "2006-01-02 15:04", "2026-08-26 10:00")
-	if jobDue(sched, &last, true, now) {
+	if jobDue(sched, time.Time{}, &last, true, now) {
 		t.Fatal("already backed up today should not be due")
 	}
 
 	// Manual success at 15:00 satisfies today's slot.
 	last = atLocal(t, "2006-01-02 15:04", "2026-08-26 15:00")
 	now = atLocal(t, "2006-01-02 15:04", "2026-08-26 16:00")
-	if jobDue(sched, &last, true, now) {
+	if jobDue(sched, time.Time{}, &last, true, now) {
 		t.Fatal("manual success should postpone next calendar fire")
 	}
 
 	// Failed at 02:05; 90m later → retry due.
 	last = atLocal(t, "2006-01-02 15:04", "2026-08-26 02:05")
 	now = atLocal(t, "2006-01-02 15:04", "2026-08-26 03:40")
-	if !jobDue(sched, &last, false, now) {
+	if !jobDue(sched, time.Time{}, &last, false, now) {
 		t.Fatal("failed daily should retry after 1h")
 	}
 }
@@ -136,7 +142,7 @@ func TestJobDueWeekly(t *testing.T) {
 	// Monday and Thursday at 02:00. 2026-08-26 is a Wednesday.
 	sched := &JobSchedule{Enabled: true, Kind: ScheduleWeekly, At: "02:00", Weekdays: []int{1, 4}}
 	now := atLocal(t, "2006-01-02 15:04", "2026-08-26 15:00") // Wed
-	next := nextDueAt(sched, nil, false, now)
+	next := nextDueAt(sched, time.Time{}, nil, false, now)
 	want := atLocal(t, "2006-01-02 15:04", "2026-08-27 02:00") // Thu
 	if next == nil || !next.Equal(want) {
 		t.Fatalf("next weekly = %v, want %v (weekday %v)", next, want, want.Weekday())
@@ -146,10 +152,10 @@ func TestJobDueWeekly(t *testing.T) {
 func TestJobDueDisabled(t *testing.T) {
 	sched := &JobSchedule{Enabled: false, Kind: ScheduleHourly}
 	now := time.Now()
-	if jobDue(sched, nil, false, now) {
+	if jobDue(sched, time.Time{}, nil, false, now) {
 		t.Fatal("disabled schedule must never be due")
 	}
-	if nextDueAt(sched, nil, false, now) != nil {
+	if nextDueAt(sched, time.Time{}, nil, false, now) != nil {
 		t.Fatal("disabled schedule has no nextDueAt")
 	}
 }
@@ -159,25 +165,25 @@ func TestScheduleOverdue(t *testing.T) {
 	now := atLocal(t, "2006-01-02 15:04", "2026-08-26 15:00")
 
 	// Never succeeded but due → overdue.
-	if !scheduleOverdue(sched, nil, false, nil, false, now) {
+	if !scheduleOverdue(sched, time.Time{}, nil, false, nil, false, now) {
 		t.Fatal("due never-success interval should be overdue")
 	}
 
 	// Daily never-run at 15:00 (not yet due) → not overdue.
 	daily := &JobSchedule{Enabled: true, Kind: ScheduleDaily, At: "02:00"}
-	if scheduleOverdue(daily, nil, false, nil, false, now) {
+	if scheduleOverdue(daily, time.Time{}, nil, false, nil, false, now) {
 		t.Fatal("waiting for first daily slot should not be overdue")
 	}
 
 	// Success 7h ago on 6h schedule → overdue.
 	success := now.Add(-7 * time.Hour)
 	attempt := success
-	if !scheduleOverdue(sched, &attempt, true, &success, false, now) {
+	if !scheduleOverdue(sched, time.Time{}, &attempt, true, &success, false, now) {
 		t.Fatal("stale success should be overdue")
 	}
 
 	// Running → not overdue.
-	if scheduleOverdue(sched, &attempt, true, &success, true, now) {
+	if scheduleOverdue(sched, time.Time{}, &attempt, true, &success, true, now) {
 		t.Fatal("running job should not be overdue")
 	}
 }
@@ -348,7 +354,7 @@ func TestDeriveScheduleState(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := deriveScheduleState(tc.sched, tc.lastAttempt, tc.lastOK, tc.lastSuccess, tc.running, now)
+			got := deriveScheduleState(tc.sched, time.Time{}, tc.lastAttempt, tc.lastOK, tc.lastSuccess, tc.running, now)
 			if got != tc.want {
 				t.Fatalf("got %q, want %q", got, tc.want)
 			}
@@ -561,5 +567,44 @@ func TestSchedulerDoesNotRefireImmediatelyAfterSuccess(t *testing.T) {
 	sched.tickOnce()
 	if got := len(app.Runs.runsForJob(jobID)); got != 1 {
 		t.Fatalf("should not refire within period, got %d runs", got)
+	}
+}
+
+// TestSchedulerStartsANeverRunDailyJob is the end-to-end case: a daily job that
+// was saved but never run starts at its first slot.
+func TestSchedulerStartsANeverRunDailyJob(t *testing.T) {
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	fake := &fakeRunner{installed: true, streamFn: gatedStream(started, release)}
+	app := testApp(t, fake)
+	_, jobID := makeJob(t, app, "never-run-daily", "/data/a")
+
+	job, _ := app.Jobs.Get(jobID)
+	slot := time.Now().Add(time.Hour)
+	job.Schedule = &JobSchedule{Enabled: true, Kind: ScheduleDaily, At: slot.Format("15:04")}
+	if _, err := app.Jobs.Update(jobID, job); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	sched := newScheduler(app)
+	// Before the slot: nothing starts.
+	sched.now = func() time.Time { return time.Now() }
+	sched.tickOnce()
+	if runs := app.Runs.runsForJob(jobID); len(runs) != 0 {
+		t.Fatalf("started %d run(s) before the first slot", len(runs))
+	}
+
+	// A tick a little after the slot starts the backup.
+	sched.now = func() time.Time { return slot.Add(20 * time.Second) }
+	sched.tickOnce()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the scheduler did not start the never-run daily job at its slot")
+	}
+	close(release)
+	runs := app.Runs.runsForJob(jobID)
+	if len(runs) != 1 || runs[0].Params["trigger"] != TriggerSchedule {
+		t.Fatalf("runs = %d, trigger = %q", len(runs), runs[0].Params["trigger"])
 	}
 }

@@ -58,7 +58,14 @@ func (c *Coordinator) StartSpeedTest(repoID string, sizeMB int) (*Run, error) {
 		Params: map[string]string{"sizeBytes": strconv.FormatInt(size, 10)},
 	}
 	return c.startRun(repo, run, func(ctx context.Context, h *runHandle) (int, error) {
-		t := &speedTest{runner: c.runner, repo: &repo, h: h, size: size}
+		// The test measures the storage itself, so the repository's speed
+		// limits do not apply to it.
+		unlimited := repo
+		unlimited.UploadLimitKiB, unlimited.DownloadLimitKiB = 0, 0
+		if repo.UploadLimitKiB > 0 || repo.DownloadLimitKiB > 0 {
+			h.Log("info", "system", "This repository's speed limits do not apply to the speed test.")
+		}
+		t := &speedTest{runner: c.runner, repo: &unlimited, h: h, size: size}
 		return t.run(ctx)
 	})
 }

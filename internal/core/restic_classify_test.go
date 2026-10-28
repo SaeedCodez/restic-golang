@@ -9,6 +9,8 @@ func TestClassifyResticFailure(t *testing.T) {
 	}{
 		{"Fatal: unable to open config file: stat /x/config: no such file or directory\nIs there a repository at the following location?\n/x", resticExitNotInitialized},
 		{"Fatal: repository does not exist: unable to open config file", resticExitNotInitialized},
+		// A damaged Local repository: check names missing packs, which is not a missing repository.
+		{"Load(<data/b43a>, 0, 0) failed: open /r/data/b4/b43a: no such file or directory\nThe repository is damaged and must be repaired.\nFatal: repository contains errors", 0},
 		{"wrong password or no key found", resticExitBadPassword},
 		{"Fatal: unable to create lock in backend: repository is already locked", resticExitLocked},
 		{"some unrelated failure", 0},

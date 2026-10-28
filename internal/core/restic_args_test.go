@@ -153,3 +153,50 @@ func TestFolderPathMustBeAbsolute(t *testing.T) {
 		t.Fatalf("absolute folder path: code=%d", code)
 	}
 }
+
+// TestSpeedLimitsReachResticButNotTheSpeedTest checks a repository's limits
+// are passed to restic as its global flags, except by the speed test, which
+// measures the storage itself.
+func TestSpeedLimitsReachResticButNotTheSpeedTest(t *testing.T) {
+	logPath := installArgLogRestic(t)
+	app := testApp(t, newResticRunner())
+	repo, _ := app.Repos.Create(Repository{Meta: Meta{Name: "r"}, BackendType: "Local", LocalPath: t.TempDir(), Password: "pw"})
+	repo, err := app.SetRepoSpeedLimit(repo.ID, 2048, 512)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, _ = newResticRunner().Backup(ctx, &repo, "/data", nil, &captureSink{})
+	calls := readArgLog(t, logPath)
+	if len(calls) != 1 {
+		t.Fatalf("calls = %q", calls)
+	}
+	args := strings.Join(calls[0], " ")
+	if !strings.Contains(args, "--limit-upload 2048 --limit-download 512 backup") {
+		t.Fatalf("backup args = %q", args)
+	}
+
+	_ = os.Remove(logPath)
+	run, err := app.Coord.StartSpeedTest(repo.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if r, ok := app.Runs.Get(run.ID); ok && r.Status.Terminal() {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	calls = readArgLog(t, logPath)
+	if len(calls) == 0 {
+		t.Fatal("the speed test ran no restic command")
+	}
+	for _, c := range calls {
+		if strings.Contains(strings.Join(c, " "), "--limit-") {
+			t.Fatalf("speed test passed a limit: %q", c)
+		}
+	}
+}

@@ -298,12 +298,22 @@ data/
 - **Automatic backups.** A job may carry an optional schedule (hourly, every N
   hours, daily, or weekly). An in-process scheduler polls the wall clock and
   starts the same backup path as a manual run (`params.trigger=schedule`).
-  Missed slots catch up once after downtime; a busy repository is skipped and
-  retried on the next tick. The process must stay running for schedules to fire —
+  A daily or weekly job that has never run starts at the first slot after it
+  was last saved. Missed slots catch up once after downtime; a busy repository
+  is skipped and retried on the next tick. The process must stay running for schedules to fire —
   see [Running as a service](#running-as-a-service).
 - **Snapshot retention.** A job may carry an optional keep-policy. After a
   successful backup, a separate retention run applies `restic forget --prune`
   to that job's tagged snapshots only (presets or custom keep rules).
+- **Automatic repository check.** A repository may be checked on its own
+  (daily, weekly or monthly at a set time, optionally reading 1–10% of the
+  data), so damaged backups show up before a restore needs them. The same
+  scheduler starts it after any backups due at that moment; the newest result
+  is on the repository card and the repository page, and a check that found
+  errors is named on the Dashboard.
+- **Speed limit.** A repository may cap restic's upload and download rate
+  (`--limit-upload` / `--limit-download`), so a backup does not take all of
+  the server's bandwidth from the sites it hosts. The speed test ignores it.
 
 ### Code layout
 
@@ -358,6 +368,8 @@ that API (see [docs/cli.md](docs/cli.md)); you can also call it directly:
 | `POST /api/repositories/{id}/check` | `202` integrity check run (`restic check`); optional `{ readData: "all" \| "10%" \| "n/t" \| size }` |
 | `POST /api/repositories/{id}/speedtest` | `202` speed test run; optional `{ sizeMB }` (default 64, at most 1024). The result is the run's `summary.speed` |
 | `GET /api/repositories/{id}/speedtests` | recent speed test results, newest first (`?limit=`, default 10); `GET /api/repositories` carries the newest as `lastSpeedTest` |
+| `PUT /api/repositories/{id}/check-schedule` | `{ enabled, every: "daily"\|"weekly"\|"monthly", at: "HH:MM", readData: ""\|"5%" }`: check the repository on its own; `GET /api/repositories` carries `checkSchedule`, `lastCheck` and `nextCheckAt` |
+| `PUT /api/repositories/{id}/speed-limit` | `{ uploadLimitKiB, downloadLimitKiB }` (0 = no limit): restic's `--limit-upload` / `--limit-download` for this repository |
 | `GET /api/runs` | filter with `status` (`active`/`finished`/an exact status), `kind`, `jobId`, `limit`; `total` reports the match count before the limit |
 | `GET /api/runs/{id}/log` | the durable log, `?after=<seq>` for incremental reads |
 | `GET /api/runs/{id}/events` | SSE: run state, progress and log, resumable via `Last-Event-ID` |
@@ -417,7 +429,8 @@ stored choice is applied before first paint, so the page never flashes.
 
 Every user value that restic takes as a positional argument (a source folder,
 a snapshot id) goes after `--`, so a value starting with `-` can never be read
-as a restic option.
+as a restic option. A repository's speed limits are added to every command as
+`--limit-upload` / `--limit-download`, except for the speed test.
 
 | Action          | Command run                                              |
 | --------------- | ------------------------------------------------------- |
@@ -433,7 +446,7 @@ as a restic option.
 | Unlock          | `restic -r <repo> unlock` (removes only stale locks)    |
 | Retention       | `restic -r <repo> forget --tag … --keep-* --prune --json` |
 | Forget snapshot | `restic -r <repo> forget --json --prune -- <id>`        |
-| Check           | `restic -r <repo> check [--read-data \| --read-data-subset S]` |
+| Check           | `restic -r <repo> check [--read-data \| --read-data-subset S]` (by hand, or on the repository's check schedule) |
 | Speed test      | random data into `restic backup --stdin --tag resticweb-speedtest`, read back with `restic dump`, each timed against a 1 KiB file; then `forget --json -- <ids…>` (no prune) |
 | Forget job data | list by tag, then `forget --json --prune -- <ids…>`     |
 | Empty repository| list all snapshots, then `forget --json --prune -- <ids…>` |
