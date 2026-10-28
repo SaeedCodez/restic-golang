@@ -677,6 +677,11 @@ const (
 // TriggerAfterBackup marks a retention run started after a successful backup.
 const TriggerAfterBackup = "after_backup"
 
+// ParamFollowUpRun is the run param naming the run that started right after
+// this one (retention after a backup). It is set before the run is recorded as
+// finished, so whoever sees it finish knows whether to wait for another run.
+const ParamFollowUpRun = "followUpRun"
+
 // RunStatus is the lifecycle state of a Run. The durable Run record is the sole
 // source of truth for whether an operation is running; a fresh process never
 // inherits a live handle, so any persisted "running" is provably stale and gets

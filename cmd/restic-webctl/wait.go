@@ -113,7 +113,8 @@ func (c *CLI) startAndMaybeWait(run *core.Run, err error, wait, follow bool) int
 	// Runs execute inside this CLI process. Exiting before the run finishes
 	// kills the restic child and leaves a durable "running"/"starting" ghost
 	// that blocks the repository until the web server restarts and reconciles.
-	// There is no detach mode yet, so always wait for completion.
+	// There is no detach mode yet, so always wait for completion, including
+	// any run it starts as it finishes.
 	if !wait && !follow {
 		wait = true
 		c.note("waiting for %s (CLI always waits; exiting early would orphan the run)…", runID)
@@ -127,18 +128,52 @@ func (c *CLI) startAndMaybeWait(run *core.Run, err error, wait, follow bool) int
 	if err != nil {
 		return c.fail(err)
 	}
+	// A run can start another in this process as it finishes (retention after
+	// a backup); exiting now would orphan that one instead.
+	followUps, err := waitForFollowUps(final, func(id string) (*core.Run, error) {
+		c.note("run %s started run %s after it; waiting for that too…", runID, id)
+		return c.waitForRun(id, follow)
+	})
+	if err != nil {
+		return c.fail(err)
+	}
 	st := final.Status
 	code := runStatusExit(st)
 	if c.cfg.json {
 		ok := st == core.StatusSuccess || st == core.StatusSuccessWarnings
-		_ = c.writeJSON(map[string]any{"ok": ok, "runId": runID, "run": final})
+		out := map[string]any{"ok": ok, "runId": runID, "run": final}
+		if len(followUps) > 0 {
+			out["followUps"] = followUps
+		}
+		_ = c.writeJSON(out)
 		return code
 	}
 	fmt.Printf("run %s finished: %s\n", runID, st)
 	if final.Error != "" {
 		fmt.Fprintf(os.Stderr, "error: %s\n", final.Error)
 	}
+	for _, f := range followUps {
+		fmt.Printf("%s run %s (started after it) finished: %s\n", f.Kind, f.ID, f.Status)
+		if f.Error != "" {
+			fmt.Fprintf(os.Stderr, "error: %s\n", f.Error)
+		}
+	}
 	return code
+}
+
+// waitForFollowUps waits, using wait, for each run that started right after
+// the finished run (and after those in turn), and returns them in order.
+func waitForFollowUps(finished *core.Run, wait func(runID string) (*core.Run, error)) ([]*core.Run, error) {
+	var out []*core.Run
+	for next := finished.Params[core.ParamFollowUpRun]; next != ""; {
+		run, err := wait(next)
+		if err != nil {
+			return out, err
+		}
+		out = append(out, run)
+		next = run.Params[core.ParamFollowUpRun]
+	}
+	return out, nil
 }
 
 func runStatusExit(st core.RunStatus) int {

@@ -336,6 +336,12 @@ restic-webctl job runs <id|name> [--limit N]
 restic-webctl job snapshots <id|name>
 ```
 
+When the job has retention enabled, a successful `job run` starts the retention
+run straight after the backup, in the same process, and waits for it too. The
+JSON result then has a `followUps` list holding that retention run with its own
+`status`; `ok` and the exit code describe the backup. The backup run records
+the retention run's id in `params.followUpRun`.
+
 A database job's backup dumps the database inside its container and stores it
 as one file, `<database>.sql`, tagged `resticweb-db:<engine>`. If the dump
 fails, no snapshot is saved and the run fails with the dump tool's message.
