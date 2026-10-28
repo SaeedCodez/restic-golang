@@ -69,6 +69,18 @@ func main() {
 	if err := app.ImportLegacyConfig(*configPath); err != nil {
 		log.Printf("note: could not import legacy config: %v", err)
 	}
+	if !app.Auth.Configured() {
+		token, fromEnv, err := core.NewSetupToken()
+		if err != nil {
+			log.Fatalf("could not create a setup token: %v", err)
+		}
+		app.SetupToken = token
+		if fromEnv {
+			log.Printf("No login password is set yet. To choose one, open the app and enter the setup token from %s.", core.SetupTokenEnv)
+		} else {
+			log.Printf("No login password is set yet. To choose one, open the app and enter this setup token: %s", token)
+		}
+	}
 
 	// Serve the embedded web/ directory at the site root.
 	uiFS, err := fs.Sub(webFiles, "web")

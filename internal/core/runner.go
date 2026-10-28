@@ -332,7 +332,7 @@ func (r *resticRunner) fillMissingSnapshotSizes(ctx context.Context, repo *Repos
 }
 
 func (*resticRunner) snapshotStats(ctx context.Context, repo *Repository, snapshotID string) (size, files int64, err error) {
-	cmd, err := resticCommand(ctx, repo, "stats", "--mode", "restore-size", "--json", snapshotID)
+	cmd, err := resticCommand(ctx, repo, "stats", "--mode", "restore-size", "--json", "--", snapshotID)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -371,13 +371,20 @@ func (*resticRunner) Unlock(ctx context.Context, repo *Repository) error {
 }
 
 func (*resticRunner) Backup(ctx context.Context, repo *Repository, source string, tags []string, sink RunSink) (int, error) {
-	args := []string{"backup", source, "--json"}
+	return streamRestic(ctx, repo, KindBackup, sink, backupArgs(source, tags)...)
+}
+
+// backupArgs builds `restic backup` arguments. Like every restic call that
+// takes a user value as a positional argument, the value goes after "--", so
+// one starting with "-" can never be read as a restic option.
+func backupArgs(source string, tags []string) []string {
+	args := []string{"backup", "--json"}
 	for _, tg := range tags {
 		if strings.TrimSpace(tg) != "" {
 			args = append(args, "--tag", tg)
 		}
 	}
-	return streamRestic(ctx, repo, KindBackup, sink, args...)
+	return append(args, "--", source)
 }
 
 func (*resticRunner) Restore(ctx context.Context, repo *Repository, snapshotID, target string, include []string, sink RunSink) (int, error) {
@@ -473,6 +480,7 @@ func forgetSnapshotArgs(ids []string, prune bool) []string {
 	if prune {
 		args = append(args, "--prune")
 	}
+	args = append(args, "--")
 	return append(args, ids...)
 }
 

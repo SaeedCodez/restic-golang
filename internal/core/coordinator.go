@@ -403,12 +403,22 @@ func (c *Coordinator) StartDownloadWith(repoID, snapshotID string, include []str
 			return 0, fmt.Errorf("could not create download workspace: %w", err)
 		}
 		c.app.Runs.mutate(h.id, true, func(r *Run) { r.Params["target"] = target })
-		if len(include) > 0 {
-			h.Log("info", "system", fmt.Sprintf("Preparing download of %d selected path(s) from snapshot %s", len(include), shortID(snapshotID)))
-		} else {
-			h.Log("info", "system", "Preparing download of snapshot "+shortID(snapshotID))
+		// As for a restore, the id must name a snapshot restic itself lists, so
+		// only a real snapshot id is ever passed on to restic.
+		snaps, err := c.listSnapshots(ctx, h, &repo, "")
+		if err != nil {
+			return 0, fmt.Errorf("could not read snapshot %s to prepare the download: %w", shortID(snapshotID), err)
 		}
-		return c.app.Runner.Restore(ctx, &repo, snapshotID, target, include, h)
+		snap, err := matchSnapshot(snaps, snapshotID)
+		if err != nil {
+			return 0, err
+		}
+		if len(include) > 0 {
+			h.Log("info", "system", fmt.Sprintf("Preparing download of %d selected path(s) from snapshot %s", len(include), shortID(snap.ID)))
+		} else {
+			h.Log("info", "system", "Preparing download of snapshot "+shortID(snap.ID))
+		}
+		return c.app.Runner.Restore(ctx, &repo, snap.ID, target, include, h)
 	})
 }
 

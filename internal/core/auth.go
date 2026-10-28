@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,14 +17,43 @@ import (
 )
 
 const (
-	minPasswordLength = 6
+	minPasswordLength = 12
 	pbkdf2Iterations  = 210_000
 	pbkdf2KeyLen      = 32
 	passwordSaltLen   = 16
 	sessionTokenBytes = 32
 	sessionCookieName = "restic_session"
 	sessionTTL        = 30 * 24 * time.Hour
+	setupTokenBytes   = 16
+
+	// SetupTokenEnv, when set, is the first-run setup token instead of a
+	// random one.
+	SetupTokenEnv = "RESTIC_WEB_SETUP_TOKEN"
 )
+
+// NewSetupToken returns the token that first-run setup over HTTP must present:
+// the SetupTokenEnv value when set, otherwise a fresh random one. The server
+// prints a random token to its log, so only someone who can read the server's
+// log (its operator) can choose the password. Without it, whoever opened a
+// fresh deployment's URL first would choose it and, with the Docker socket
+// mounted, control the server. The CLI's `auth setup` needs no token.
+func NewSetupToken() (token string, fromEnv bool, err error) {
+	if v := strings.TrimSpace(os.Getenv(SetupTokenEnv)); v != "" {
+		return v, true, nil
+	}
+	var b [setupTokenBytes]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", false, err
+	}
+	return hex.EncodeToString(b[:]), false, nil
+}
+
+// CheckSetupToken reports whether token is the app's setup token. An app with
+// no setup token refuses every setup over HTTP.
+func (a *App) CheckSetupToken(token string) bool {
+	want := a.SetupToken
+	return want != "" && subtle.ConstantTimeCompare([]byte(strings.TrimSpace(token)), []byte(want)) == 1
+}
 
 // AuthStore persists the single app-login password (hashed) in Postgres.
 type AuthStore struct {

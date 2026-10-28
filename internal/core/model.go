@@ -3,6 +3,7 @@ package core
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -143,6 +144,11 @@ func (f *Folder) Validate() error {
 	}
 	if strings.TrimSpace(f.Path) == "" {
 		return errors.New("a folder path is required")
+	}
+	// Relative to what would be unclear (the app's working directory), and an
+	// absolute path also cannot start with "-" and be taken for an option.
+	if !filepath.IsAbs(f.Path) {
+		return errors.New("the folder path must be absolute, e.g. /data/site")
 	}
 	return nil
 }

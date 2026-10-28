@@ -50,7 +50,7 @@ func TestRestoreArgs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("custom: %v", err)
 	}
-	want := []string{"restore", "snap1", "--target", "/tmp/out", "--delete", "--json"}
+	want := []string{"restore", "--target", "/tmp/out", "--delete", "--json", "--", "snap1"}
 	if strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Fatalf("custom args = %v, want %v", got, want)
 	}
@@ -59,7 +59,7 @@ func TestRestoreArgs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("in-place: %v", err)
 	}
-	want = []string{"restore", "snap1", "--target", "/", "--delete", "--json", "--include", "/data/folder"}
+	want = []string{"restore", "--target", "/", "--delete", "--json", "--include", "/data/folder", "--", "snap1"}
 	if strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Fatalf("in-place args = %v, want %v", got, want)
 	}

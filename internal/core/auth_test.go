@@ -10,6 +10,7 @@ import (
 
 func TestAuthSetupLoginAndProtectsAPI(t *testing.T) {
 	app := testApp(t, newResticRunner())
+	app.SetupToken = "test-setup-token"
 	h := NewServer(app).Routes(http.NotFoundHandler())
 
 	// Before setup, protected APIs refuse.
@@ -29,12 +30,12 @@ func TestAuthSetupLoginAndProtectsAPI(t *testing.T) {
 	}
 
 	// Short passwords are rejected.
-	if code := doJSON(t, h, "POST", "/api/auth/setup", map[string]any{"password": "short"}, nil); code != http.StatusBadRequest {
+	if code := doJSON(t, h, "POST", "/api/auth/setup", map[string]any{"password": "short-pass1", "setupToken": "test-setup-token"}, nil); code != http.StatusBadRequest {
 		t.Fatalf("short password: code=%d, want 400", code)
 	}
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/api/auth/setup", jsonBody(t, map[string]any{"password": "secret1"}))
+	req := httptest.NewRequest("POST", "/api/auth/setup", jsonBody(t, map[string]any{"password": "first-password", "setupToken": "test-setup-token"}))
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("setup: code=%d body=%s", rec.Code, rec.Body.String())
@@ -45,7 +46,7 @@ func TestAuthSetupLoginAndProtectsAPI(t *testing.T) {
 	}
 
 	// Setup again must fail.
-	if code := doJSON(t, h, "POST", "/api/auth/setup", map[string]any{"password": "another"}, nil); code != http.StatusConflict {
+	if code := doJSON(t, h, "POST", "/api/auth/setup", map[string]any{"password": "another-password"}, nil); code != http.StatusConflict {
 		t.Fatalf("second setup: code=%d, want 409", code)
 	}
 
@@ -81,7 +82,7 @@ func TestAuthSetupLoginAndProtectsAPI(t *testing.T) {
 
 	// Login again works.
 	rec = httptest.NewRecorder()
-	req = httptest.NewRequest("POST", "/api/auth/login", jsonBody(t, map[string]any{"password": "secret1"}))
+	req = httptest.NewRequest("POST", "/api/auth/login", jsonBody(t, map[string]any{"password": "first-password"}))
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("login: code=%d body=%s", rec.Code, rec.Body.String())
@@ -94,8 +95,8 @@ func TestAuthSetupLoginAndProtectsAPI(t *testing.T) {
 	// Change password.
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest("POST", "/api/auth/password", jsonBody(t, map[string]any{
-		"currentPassword": "secret1",
-		"newPassword":     "secret2",
+		"currentPassword": "first-password",
+		"newPassword":     "second-password",
 	}))
 	req.AddCookie(cookie)
 	h.ServeHTTP(rec, req)
@@ -111,17 +112,17 @@ func TestAuthSetupLoginAndProtectsAPI(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status after password change: code=%d", rec.Code)
 	}
-	if code := doJSON(t, h, "POST", "/api/auth/login", map[string]any{"password": "secret1"}, nil); code != http.StatusUnauthorized {
+	if code := doJSON(t, h, "POST", "/api/auth/login", map[string]any{"password": "first-password"}, nil); code != http.StatusUnauthorized {
 		t.Fatalf("old password still works: code=%d", code)
 	}
-	if code := doJSON(t, h, "POST", "/api/auth/login", map[string]any{"password": "secret2"}, nil); code != http.StatusOK {
+	if code := doJSON(t, h, "POST", "/api/auth/login", map[string]any{"password": "second-password"}, nil); code != http.StatusOK {
 		t.Fatalf("new password login: code=%d", code)
 	}
 }
 
 func TestAuthPersistsAcrossRestart(t *testing.T) {
 	app := testApp(t, newResticRunner())
-	if err := app.Auth.SetupPassword("persisted"); err != nil {
+	if err := app.Auth.SetupPassword("persisted-password"); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
 
@@ -129,7 +130,7 @@ func TestAuthPersistsAcrossRestart(t *testing.T) {
 	if !app2.Auth.Configured() {
 		t.Fatal("password was not persisted")
 	}
-	if !app2.Auth.CheckPassword("persisted") {
+	if !app2.Auth.CheckPassword("persisted-password") {
 		t.Fatal("persisted password did not verify")
 	}
 }

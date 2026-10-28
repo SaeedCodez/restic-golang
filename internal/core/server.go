@@ -11,13 +11,15 @@ import (
 	"strings"
 )
 
-// Server holds the shared state for all HTTP handlers: everything lives on App.
+// Server holds the shared state for all HTTP handlers: everything lives on App,
+// except the login limiter, which only the HTTP login and setup use.
 type Server struct {
-	app *App
+	app    *App
+	logins *loginLimiter
 }
 
 func NewServer(app *App) *Server {
-	return &Server{app: app}
+	return &Server{app: app, logins: newLoginLimiter()}
 }
 
 // routes registers every endpoint on a fresh mux. Static UI files are served
@@ -100,7 +102,7 @@ func (s *Server) Routes(static http.Handler) http.Handler {
 
 	// Everything else is the single-page UI.
 	mux.Handle("/", static)
-	return s.requireAuth(mux)
+	return securityHeaders(sameOriginOnly(s.requireAuth(mux)))
 }
 
 // publicAPIPaths do not require a session cookie.

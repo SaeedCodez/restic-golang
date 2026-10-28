@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 )
 
@@ -95,6 +96,20 @@ func snapshotIDsOf(snaps []Snapshot) []string {
 		}
 	}
 	return out
+}
+
+// snapshotIDPattern is a restic snapshot id or a prefix of one: restic ids are
+// lowercase hex.
+var snapshotIDPattern = regexp.MustCompile(`^[0-9a-f]{1,64}$`)
+
+// checkSnapshotID rejects a value that is not a snapshot id before it reaches
+// restic, for callers that pass a request's id straight through rather than
+// matching it against the repository's snapshot list first.
+func checkSnapshotID(id string) error {
+	if !snapshotIDPattern.MatchString(id) {
+		return validf("that is not a snapshot id: snapshot ids are hexadecimal")
+	}
+	return nil
 }
 
 // matchSnapshot finds a snapshot by full id, short id, or unique prefix.

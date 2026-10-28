@@ -15,7 +15,7 @@ import { useLive } from "@/lib/live";
 import { useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
-const MIN_LEN = 6;
+const MIN_LEN = 12;
 
 /**
  * SettingsSection is one settings card: what it is on the left, its controls

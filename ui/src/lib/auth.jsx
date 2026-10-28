@@ -44,8 +44,8 @@ export function AuthProvider({ children }) {
   }, [refresh]);
 
   const setup = React.useCallback(
-    async (password) => {
-      const res = await Auth.setup(password);
+    async (password, setupToken) => {
+      const res = await Auth.setup(password, setupToken);
       if (res.ok) {
         setSetupRequired(false);
         setAuthenticated(true);

@@ -50,7 +50,7 @@ export const Status = {
 
 export const Auth = {
   status: () => api.get("/api/auth/status"),
-  setup: (password) => api.post("/api/auth/setup", { password }),
+  setup: (password, setupToken) => api.post("/api/auth/setup", { password, setupToken }),
   login: (password) => api.post("/api/auth/login", { password }),
   logout: () => api.post("/api/auth/logout"),
   changePassword: (currentPassword, newPassword) =>

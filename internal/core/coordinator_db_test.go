@@ -371,8 +371,14 @@ func TestIncludesAreEscapedForRestic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := args[len(args)-1]; got != `/data/site\[1]/photo\*.jpg` {
-		t.Fatalf("include = %q", got)
+	include := ""
+	for i, a := range args {
+		if a == "--include" && i+1 < len(args) {
+			include = args[i+1]
+		}
+	}
+	if include != `/data/site\[1]/photo\*.jpg` {
+		t.Fatalf("include = %q in %v", include, args)
 	}
 }
 
