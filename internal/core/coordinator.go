@@ -439,12 +439,19 @@ func (c *Coordinator) listSnapshots(ctx context.Context, h *runHandle, repo *Rep
 // startRun reserves the repository, creates the durable run, and launches the
 // operation in the background. It returns the created run (or a BusyError).
 func (c *Coordinator) startRun(repo Repository, run *Run, exec runExec) (*Run, error) {
+	return c.startRunAfter(nil, repo, run, exec)
+}
+
+// startRunAfter is startRun for a run that follows prev, which may still hold
+// the repository: prev hands its slot straight to the new run, so no other
+// operation can take the repository in between.
+func (c *Coordinator) startRunAfter(prev *activeRun, repo Repository, run *Run, exec runExec) (*Run, error) {
 	c.mu.Lock()
 	if c.closing {
 		c.mu.Unlock()
 		return nil, conflictf("the app is shutting down; start this again once it is back")
 	}
-	if ar := c.active[repo.ID]; ar != nil {
+	if ar := c.active[repo.ID]; ar != nil && ar != prev {
 		// A holder whose run has already reached a terminal state is finishing but
 		// has not yet released the slot; it no longer blocks a new operation, so a
 		// job can be re-run the instant it is seen to have succeeded.
@@ -497,24 +504,12 @@ func (c *Coordinator) startRun(repo Repository, run *Run, exec runExec) (*Run, e
 }
 
 // drive runs the operation to completion and records its terminal state.
-// Successful backups may chain a retention run after the repository slot is
-// released.
+// A successful backup of a job with retention starts the retention run before
+// it is recorded as finished, so the finished backup names the run that follows
+// it (ParamFollowUpRun) and a caller waiting on the backup can wait for that
+// run too.
 func (c *Coordinator) drive(ctx context.Context, ar *activeRun, exec runExec) {
-	var chainRetentionJob string
-	defer func() {
-		c.finish(ar)
-		if chainRetentionJob != "" {
-			if _, err := c.StartRetention(chainRetentionJob, TriggerAfterBackup); err != nil {
-				var busy *BusyError
-				if errors.As(err, &busy) {
-					// Another operation grabbed the repo; the next successful
-					// backup will apply retention.
-					return
-				}
-				log.Printf("retention: could not start after backup for job %s: %v", chainRetentionJob, err)
-			}
-		}
-	}()
+	defer c.finish(ar)
 
 	ar.handle.setStatus(StatusRunning)
 	code, err := exec(ctx, ar.handle)
@@ -524,15 +519,45 @@ func (c *Coordinator) drive(ctx context.Context, ar *activeRun, exec runExec) {
 		ar.handle.Log("error", "system", errMsg)
 	}
 	ar.handle.Log(logLevelFor(status), "system", terminalMessage(status))
-	ar.handle.finalize(status, code, errMsg)
-
-	if ar.kind == KindBackup && (status == StatusSuccess || status == StatusSuccessWarnings) {
-		if run, ok := c.store.Get(ar.runID); ok && run.JobID != "" {
-			if job, ok := c.app.Jobs.Get(run.JobID); ok && job.Retention != nil && job.Retention.Enabled {
-				chainRetentionJob = run.JobID
+	if next := c.startFollowUp(ar, status); next != nil {
+		ar.handle.Log("info", "system", "Retention runs next as run "+shortID(next.ID)+".")
+		c.store.mutate(ar.runID, false, func(r *Run) {
+			if r.Params == nil {
+				r.Params = map[string]string{}
 			}
-		}
+			r.Params[ParamFollowUpRun] = next.ID
+		})
 	}
+	ar.handle.finalize(status, code, errMsg)
+}
+
+// startFollowUp starts the retention run that a successful backup of a job with
+// retention enabled calls for, handing it the backup's repository slot. It
+// returns nil when none is due or it could not start; retention then waits for
+// the next successful backup.
+func (c *Coordinator) startFollowUp(ar *activeRun, status RunStatus) *Run {
+	if ar.kind != KindBackup || (status != StatusSuccess && status != StatusSuccessWarnings) {
+		return nil
+	}
+	run, ok := c.store.Get(ar.runID)
+	if !ok || run.JobID == "" {
+		return nil
+	}
+	job, ok := c.app.Jobs.Get(run.JobID)
+	if !ok || job.Retention == nil || !job.Retention.Enabled {
+		return nil
+	}
+	next, err := c.startRetention(ar, job.ID, TriggerAfterBackup, false)
+	if err != nil {
+		var busy *BusyError
+		if !errors.As(err, &busy) {
+			// A busy repository (the job was moved to one in use while it ran)
+			// is expected; anything else is worth a line in the server log.
+			log.Printf("retention: could not start after backup for job %s: %v", job.ID, err)
+		}
+		return nil
+	}
+	return next
 }
 
 // StartRetention starts a forget+prune run for a job's tagged snapshots.
@@ -543,6 +568,12 @@ func (c *Coordinator) StartRetention(jobID, trigger string) (*Run, error) {
 // StartRetentionWith is StartRetention, or with dryRun a preview: the run logs
 // how many snapshots the policy keeps and would remove, and changes nothing.
 func (c *Coordinator) StartRetentionWith(jobID, trigger string, dryRun bool) (*Run, error) {
+	return c.startRetention(nil, jobID, trigger, dryRun)
+}
+
+// startRetention is StartRetentionWith for a run that follows prev (see
+// startRunAfter); prev is nil for a retention run started on its own.
+func (c *Coordinator) startRetention(prev *activeRun, jobID, trigger string, dryRun bool) (*Run, error) {
 	if trigger == "" {
 		trigger = TriggerManual
 	}
@@ -575,13 +606,13 @@ func (c *Coordinator) StartRetentionWith(jobID, trigger string, dryRun bool) (*R
 	}
 	if dryRun {
 		run.Params["dryRun"] = "true"
-		return c.startRun(repo, run, func(ctx context.Context, h *runHandle) (int, error) {
+		return c.startRunAfter(prev, repo, run, func(ctx context.Context, h *runHandle) (int, error) {
 			h.Log("info", "system", "Previewing retention ("+desc+"): nothing is forgotten or pruned.")
 			h.Log("info", "system", fmt.Sprintf("Checking which snapshots tagged %s in repository %q the policy would keep", tag, repo.Name))
 			return c.runner.PreviewForget(ctx, &repo, tag, policy, h)
 		})
 	}
-	return c.startRun(repo, run, func(ctx context.Context, h *runHandle) (int, error) {
+	return c.startRunAfter(prev, repo, run, func(ctx context.Context, h *runHandle) (int, error) {
 		switch trigger {
 		case TriggerAfterBackup:
 			h.Log("info", "system", "Applying retention after backup ("+desc+").")

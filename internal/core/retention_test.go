@@ -1,7 +1,10 @@
 package core
 
 import (
+	"context"
+	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -95,26 +98,18 @@ func TestRetentionChainsAfterBackup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartBackup: %v", err)
 	}
-	waitForStatus(t, app.Runs, run.ID, StatusSuccess, 2*time.Second)
+	backup := waitForStatus(t, app.Runs, run.ID, StatusSuccess, 2*time.Second)
 
-	var retentionID string
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		for _, r := range app.Runs.runsForJob(jobID) {
-			if r.Kind == KindRetention {
-				retentionID = r.ID
-				break
-			}
-		}
-		if retentionID != "" {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	// The finished backup already names the retention run, so a caller that
+	// waits on the backup (restic-webctl) knows to wait for it too.
+	retentionID := backup.Params[ParamFollowUpRun]
 	if retentionID == "" {
-		t.Fatal("expected a retention run after successful backup")
+		t.Fatal("expected the finished backup to name the retention run after it")
 	}
 	got := waitForStatus(t, app.Runs, retentionID, StatusSuccess, 2*time.Second)
+	if got.Kind != KindRetention {
+		t.Fatalf("follow-up kind = %q, want retention", got.Kind)
+	}
 	if got.Params["trigger"] != TriggerAfterBackup {
 		t.Fatalf("trigger = %q, want after_backup", got.Params["trigger"])
 	}
@@ -139,7 +134,10 @@ func TestRetentionSkippedWhenDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartBackup: %v", err)
 	}
-	waitForStatus(t, app.Runs, run.ID, StatusSuccess, 2*time.Second)
+	backup := waitForStatus(t, app.Runs, run.ID, StatusSuccess, 2*time.Second)
+	if next := backup.Params[ParamFollowUpRun]; next != "" {
+		t.Fatalf("backup names follow-up run %q, want none", next)
+	}
 	time.Sleep(100 * time.Millisecond)
 
 	for _, r := range app.Runs.runsForJob(jobID) {
@@ -150,6 +148,57 @@ func TestRetentionSkippedWhenDisabled(t *testing.T) {
 	if n := len(fake.recordedForgets()); n != 0 {
 		t.Fatalf("forget calls = %d, want 0", n)
 	}
+}
+
+// The retention run takes the repository straight from the backup, so another
+// operation cannot slip in between and push retention to the next backup.
+func TestBackupHandsRepositoryToRetention(t *testing.T) {
+	release := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	fake := &fakeRunner{installed: true, streamFn: func(ctx context.Context, kind RunKind, sink RunSink) (int, error) {
+		if kind == KindRetention {
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return resticExitInterrupted, nil
+			}
+		}
+		return 0, nil
+	}}
+	app := newRunTestApp(t, fake)
+	t.Cleanup(unblock)
+	repoID, jobID := makeJob(t, app, "ret-handoff", "/data/handoff")
+
+	job, _ := app.Jobs.Get(jobID)
+	job.Retention = &JobRetention{Enabled: true, Preset: RetentionPresetBalanced}
+	if _, err := app.Jobs.Update(jobID, job); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	run, err := app.Coord.StartBackup(jobID)
+	if err != nil {
+		t.Fatalf("StartBackup: %v", err)
+	}
+	backup := waitForStatus(t, app.Runs, run.ID, StatusSuccess, 2*time.Second)
+	retentionID := backup.Params[ParamFollowUpRun]
+	if retentionID == "" {
+		t.Fatal("expected the finished backup to name the retention run after it")
+	}
+	if ret, ok := app.Runs.Get(retentionID); !ok || ret.Status.Terminal() {
+		t.Fatalf("retention run should still be going, got %+v", ret)
+	}
+
+	_, err = app.Coord.StartCheck(repoID, "")
+	var busy *BusyError
+	if !errors.As(err, &busy) {
+		t.Fatalf("StartCheck during retention: err = %v, want busy", err)
+	}
+	if busy.Blocking.RunID != retentionID {
+		t.Fatalf("blocker = %q, want the retention run %q", busy.Blocking.RunID, retentionID)
+	}
+
+	unblock()
+	waitForStatus(t, app.Runs, retentionID, StatusSuccess, 2*time.Second)
 }
 
 func TestStartRetentionManual(t *testing.T) {

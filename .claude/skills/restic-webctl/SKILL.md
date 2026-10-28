@@ -73,7 +73,8 @@ restic-webctl --json job run <job>
 
 `success_warnings` means a snapshot was made but some files were unreadable;
 the log lists them. If retention is enabled on the job, a retention run starts
-automatically afterwards.
+automatically afterwards and the command waits for it as well: it is in the
+result's `followUps` with its own `status` (`ok` describes the backup).
 
 ### List snapshots
 

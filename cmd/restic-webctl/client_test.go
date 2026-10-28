@@ -144,3 +144,40 @@ func TestFmtLimit(t *testing.T) {
 		}
 	}
 }
+
+// The CLI drives runs in its own process, so it must not exit while a run that
+// a finished run started (retention after a backup) is still going.
+func TestWaitForFollowUps(t *testing.T) {
+	runs := map[string]*core.Run{
+		"ret":   {ID: "ret", Kind: core.KindRetention, Status: core.StatusSuccess, Params: map[string]string{core.ParamFollowUpRun: "after"}},
+		"after": {ID: "after", Kind: core.KindCheck, Status: core.StatusFailed},
+	}
+	var waited []string
+	wait := func(id string) (*core.Run, error) {
+		waited = append(waited, id)
+		run, ok := runs[id]
+		if !ok {
+			return nil, errors.New("unknown run " + id)
+		}
+		return run, nil
+	}
+
+	backup := &core.Run{ID: "b", Kind: core.KindBackup, Status: core.StatusSuccess, Params: map[string]string{core.ParamFollowUpRun: "ret"}}
+	got, err := waitForFollowUps(backup, wait)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].ID != "ret" || got[1].ID != "after" || strings.Join(waited, ",") != "ret,after" {
+		t.Fatalf("follow-ups = %v (waited %v), want ret then after", got, waited)
+	}
+
+	waited = nil
+	if got, err := waitForFollowUps(&core.Run{ID: "plain", Status: core.StatusSuccess}, wait); err != nil || len(got) != 0 || len(waited) != 0 {
+		t.Fatalf("run without follow-up: got %v, err %v, waited %v", got, err, waited)
+	}
+
+	broken := &core.Run{ID: "b2", Params: map[string]string{core.ParamFollowUpRun: "gone"}}
+	if _, err := waitForFollowUps(broken, wait); err == nil {
+		t.Fatal("a follow-up that cannot be waited for should return the error")
+	}
+}
