@@ -66,8 +66,13 @@ func engineLabel(engine string) string {
 // detectEngine infers a database engine from a container: Coolify's own label
 // for standalone databases first, then the image name. "" means not a database
 // the app can dump.
+//
+// Coolify writes the label as "standalone-<engine>" (e.g. "standalone-mariadb").
+// The label matters when the image name is not available: Docker's container
+// list reports the image ID (sha256:…) once the tag the container was created
+// from no longer exists on the host.
 func detectEngine(image string, labels map[string]string) string {
-	switch strings.ToLower(labels["coolify.database.subType"]) {
+	switch strings.TrimPrefix(strings.ToLower(labels["coolify.database.subType"]), "standalone-") {
 	case "postgresql", "postgres":
 		return EnginePostgres
 	case "mysql":

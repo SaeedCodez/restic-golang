@@ -344,4 +344,15 @@ func TestDetectEngine(t *testing.T) {
 	if got := detectEngine("custom:1", map[string]string{"coolify.database.subType": "postgresql"}); got != EnginePostgres {
 		t.Errorf("label: %q", got)
 	}
+	// Coolify's real label value, on a container whose image tag is gone.
+	for sub, want := range map[string]string{
+		"standalone-mariadb":    EngineMariaDB,
+		"standalone-mysql":      EngineMySQL,
+		"standalone-postgresql": EnginePostgres,
+		"standalone-redis":      "",
+	} {
+		if got := detectEngine("sha256:5e73baf8179b", map[string]string{"coolify.database.subType": sub}); got != want {
+			t.Errorf("label %s: %q, want %q", sub, got, want)
+		}
+	}
 }
